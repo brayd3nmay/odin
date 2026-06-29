@@ -23,6 +23,9 @@ export class FloatingWidget {
   private expanded = false;
   private thread: ChatThread | null = null;
   private pendingPropose: ((accepted: boolean) => void) | null = null;
+  private pendingAsk: ((answer: string) => void) | null = null;
+  private aborters = new Set<AbortController>();
+  private busy = false;
 
   constructor(private plugin: BuddyPlugin) {
     this.root = document.body.createDiv({ cls: "buddy-root" });
@@ -106,7 +109,7 @@ export class FloatingWidget {
     this.expanded = !this.expanded;
     this.card.toggleClass("is-expanded", this.expanded);
   }
-  destroy() { this.root.remove(); }
+  destroy() { this.cancelAll(); this.root.remove(); }
 
   private addMsg(cls: string, text?: string): HTMLElement {
     const el = this.streamEl.createDiv({ cls: `buddy-msg ${cls}` });
@@ -136,7 +139,7 @@ export class FloatingWidget {
       : PROMPTS.refine(this.plugin.settings.styleGuide);
 
     const status = this.addMsg("buddy-status", tkind === "fix" ? "Fixing formatting…" : "Refining…");
-    const abort = new AbortController();
+    const abort = this.track(new AbortController());
     try {
       const proposed = await this.plugin.agent.transform(prompt, target.text, {
         model: cfg.model, thinking: cfg.thinking, allowWeb: false, abort,
@@ -161,7 +164,7 @@ export class FloatingWidget {
 
     const cfg = this.plugin.settings.findGaps;
     const status = this.addMsg("buddy-status", "Looking for gaps…");
-    const abort = new AbortController();
+    const abort = this.track(new AbortController());
     try {
       const report = await this.plugin.agent.analysis(
         PROMPTS.findGaps,
@@ -184,11 +187,13 @@ export class FloatingWidget {
       box.createDiv({ cls: "buddy-ask-q", text: question });
       const input = box.createEl("input", { cls: "buddy-ask-input", attr: { placeholder: "Your answer…" } });
       input.focus();
+      this.pendingAsk = resolve;
       input.onkeydown = (ev: KeyboardEvent) => {
         if (ev.key === "Enter" && input.value.trim()) {
           const answer = input.value.trim();
           box.empty();
           box.setText(`You: ${answer}`);
+          this.pendingAsk = null;
           resolve(answer);
         }
       };
@@ -222,7 +227,7 @@ export class FloatingWidget {
       const instruction = steerInput.value.trim();
       wrap.remove();
       const status = this.addMsg("buddy-status", "Updating…");
-      const abort = new AbortController();
+      const abort = this.track(new AbortController());
       const basePrompt = kind === "fix" ? PROMPTS.fixFormatting : PROMPTS.refine(this.plugin.settings.styleGuide);
       const followPrompt = `${basePrompt}\n\nThe user reviewed your previous result and asks: "${instruction}". ` +
         `Apply that to the text below (which is the ORIGINAL note, not your previous output).`;
@@ -247,41 +252,57 @@ export class FloatingWidget {
   }
 
   private async sendChat(text: string) {
-    this.open();
-    const thread = this.ensureThread();
-    addMessage(thread, "user", text);
-    this.addMsg("buddy-user").setText(text);
-    const status = this.addMsg("buddy-status", "Thinking…");
-    const cfg = this.plugin.settings.chat;
-    const abort = new AbortController();
-
-    const ui = {
-      onAskUser: (q: string) => this.askUser(q),
-      onProposeEdit: (content: string, summary: string) => this.proposeEdit(content, summary),
-      onProgress: (t: string) => status.setText(t),
-    };
+    if (this.busy) return;
+    this.busy = true;
     try {
-      const { text: reply, sessionId } = await this.plugin.agent.chat(text, thread.sessionId, ui, {
-        model: cfg.model, thinking: cfg.thinking, allowWeb: this.plugin.settings.allowWeb, abort,
-      });
-      thread.sessionId = sessionId;
-      status.remove();
-      addMessage(thread, "assistant", reply);
-      this.addMsg("buddy-assistant").setText(reply);
-      await this.plugin.saveThreads();
-    } catch (e) {
-      status.setText("Error: " + (e instanceof Error ? e.message : String(e)));
-      status.addClass("buddy-error");
-      await this.plugin.saveThreads();
+      this.open();
+      const thread = this.ensureThread();
+      addMessage(thread, "user", text);
+      this.addMsg("buddy-user").setText(text);
+      const status = this.addMsg("buddy-status", "Thinking…");
+      const cfg = this.plugin.settings.chat;
+      const abort = this.track(new AbortController());
+
+      const ui = {
+        onAskUser: (q: string) => this.askUser(q),
+        onProposeEdit: (content: string, summary: string) => this.proposeEdit(content, summary),
+        onProgress: (t: string) => status.setText(t),
+      };
+      try {
+        const { text: reply, sessionId } = await this.plugin.agent.chat(text, thread.sessionId, ui, {
+          model: cfg.model, thinking: cfg.thinking, allowWeb: this.plugin.settings.allowWeb, abort,
+        });
+        thread.sessionId = sessionId;
+        status.remove();
+        addMessage(thread, "assistant", reply);
+        this.addMsg("buddy-assistant").setText(reply);
+        await this.plugin.saveThreads();
+      } catch (e) {
+        status.setText("Error: " + (e instanceof Error ? e.message : String(e)));
+        status.addClass("buddy-error");
+        await this.plugin.saveThreads();
+      }
+    } finally {
+      this.busy = false;
     }
   }
 
+  private track(c: AbortController): AbortController {
+    this.aborters.add(c);
+    return c;
+  }
+
+  private cancelAll() {
+    for (const c of this.aborters) c.abort();
+    this.aborters.clear();
+    if (this.pendingPropose) { const r = this.pendingPropose; this.pendingPropose = null; r(false); }
+    if (this.pendingAsk) { const r = this.pendingAsk; this.pendingAsk = null; r(""); }
+    // ponytail: completed controllers stay in aborters until cancelAll clears them — aborting settled controllers is a harmless no-op
+  }
+
   private resetStream() {
-    if (this.pendingPropose) {
-      const r = this.pendingPropose;
-      this.pendingPropose = null;
-      r(false);
-    }
+    if (this.pendingPropose) { const r = this.pendingPropose; this.pendingPropose = null; r(false); }
+    if (this.pendingAsk) { const r = this.pendingAsk; this.pendingAsk = null; r(""); }
     this.streamEl.empty();
   }
 
