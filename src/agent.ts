@@ -33,20 +33,34 @@ export const PROMPTS = {
 };
 
 // Resolve the user's installed `claude`. Returns undefined to let the SDK use its bundled binary.
+// GUI apps on macOS get a minimal PATH, so an in-process `command -v claude` usually misses
+// user installs (~/.local/bin, homebrew, nvm). Ask the user's login shell (which loads their real
+// PATH) first, then fall back to known locations.
 // ponytail: best-effort path probing; manual-verified, not unit-tested.
 export function resolveClaudePath(override: string): string | undefined {
   if (override && existsSync(override)) return override;
-  try {
-    const found = execSync("command -v claude", { encoding: "utf8" }).trim();
-    if (found && existsSync(found)) return found;
-  } catch {
-    // not on PATH; fall through to common locations
+
+  const shell = process.env.SHELL || "/bin/zsh";
+  const probes = [`${shell} -lic 'command -v claude'`, "command -v claude"];
+  for (const cmd of probes) {
+    try {
+      const found = execSync(cmd, { encoding: "utf8", timeout: 5000 })
+        .split("\n")
+        .map((l) => l.trim())
+        .find((l) => l && existsSync(l));
+      if (found) return found;
+    } catch {
+      // try the next probe / fall through to known locations
+    }
   }
+
   const home = os.homedir();
   const candidates = [
+    path.join(home, ".local", "bin", "claude"),
     path.join(home, ".claude", "local", "claude"),
     "/opt/homebrew/bin/claude",
     "/usr/local/bin/claude",
+    path.join(home, ".npm-global", "bin", "claude"),
   ];
   for (const c of candidates) if (existsSync(c)) return c;
   return undefined;

@@ -33,7 +33,7 @@
 
 .buddy-stream { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
 
-.buddy-chips { display: flex; gap: 6px; padding: 8px 12px; flex-wrap: wrap; border-bottom: 1px solid var(--background-modifier-border); }
+.buddy-chips { display: flex; gap: 6px; padding: 8px 12px; flex-wrap: wrap; border-top: 1px solid var(--background-modifier-border); }
 .buddy-chip { padding: 3px 10px; border-radius: 999px; background: var(--background-secondary); border: 1px solid var(--background-modifier-border); cursor: pointer; font-size: 12px; }
 .buddy-chip:hover { background: var(--background-modifier-hover); }
 
@@ -55,9 +55,9 @@
 
 .buddy-selectors { display: flex; gap: 4px; }
 .buddy-select { font-size: 11px; background: var(--background-secondary); border: 1px solid var(--background-modifier-border); border-radius: 4px; }
-.buddy-footer { display: flex; gap: 6px; align-items: flex-end; padding: 8px; border-top: 1px solid var(--background-modifier-border); }
-.buddy-input { flex: 1; resize: none; max-height: 120px; }
-.buddy-send, .buddy-hist-btn { display: flex; align-items: center; justify-content: center; }
+.buddy-footer { display: flex; gap: 6px; align-items: center; padding: 8px; }
+.buddy-input { flex: 1; resize: none; height: 32px; min-height: 32px; box-sizing: border-box; padding: 5px 8px; line-height: 1.3; overflow-y: auto; }
+.buddy-send, .buddy-hist-btn { flex: 0 0 auto; height: 32px; width: 32px; padding: 0; box-sizing: border-box; display: flex; align-items: center; justify-content: center; }
 .buddy-user { align-self: flex-end; background: var(--interactive-accent); color: var(--text-on-accent); padding: 6px 10px; border-radius: 10px; max-width: 85%; }
 .buddy-assistant { align-self: flex-start; background: var(--background-secondary); padding: 6px 10px; border-radius: 10px; max-width: 85%; white-space: pre-wrap; }
 .buddy-hist-row { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; }
