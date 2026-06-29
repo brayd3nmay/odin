@@ -89,6 +89,12 @@ function thinkingOpt(level: ThinkingLevel): { maxThinkingTokens?: number } {
   return t > 0 ? { maxThinkingTokens: t } : {};
 }
 
+// The read-only tool allowlist — this IS the plugin's "no write tools" security model.
+// Kept in one place so analysis() and chat() can never drift out of sync.
+function builtinTools(allowWeb: boolean): string[] {
+  return allowWeb ? ["Read", "Glob", "Grep", "WebSearch", "WebFetch"] : ["Read", "Glob", "Grep"];
+}
+
 export class AgentClient {
   constructor(private cfg: { cwd: string; claudePath?: string }) {}
 
@@ -118,9 +124,7 @@ export class AgentClient {
       version: "1.0.0",
       tools: [this.askUserTool(ui)],
     });
-    const builtins = o.allowWeb
-      ? ["Read", "Glob", "Grep", "WebSearch", "WebFetch"]
-      : ["Read", "Glob", "Grep"];
+    const builtins = builtinTools(o.allowWeb);
     const messages: any[] = [];
     for await (const m of query({
       prompt: once(userText),
@@ -153,9 +157,7 @@ export class AgentClient {
     const tools: any[] = [this.askUserTool(ui)];
     if (ui.onProposeEdit) tools.push(this.proposeEditTool(ui));
     const buddy = createSdkMcpServer({ name: "buddy", version: "1.0.0", tools });
-    const builtins = o.allowWeb
-      ? ["Read", "Glob", "Grep", "WebSearch", "WebFetch"]
-      : ["Read", "Glob", "Grep"];
+    const builtins = builtinTools(o.allowWeb);
     const allowed = [...builtins, "mcp__buddy__ask_user"];
     if (ui.onProposeEdit) allowed.push("mcp__buddy__propose_note_edit");
 

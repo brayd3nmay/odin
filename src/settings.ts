@@ -1,4 +1,4 @@
-import { App, PluginSettingTab, Setting } from "obsidian";
+import { App, PluginSettingTab, Setting, debounce } from "obsidian";
 
 export type ThinkingLevel = "off" | "normal" | "high";
 
@@ -21,6 +21,12 @@ export const MODELS = [
   { id: "opus", label: "Opus" },
   { id: "sonnet", label: "Sonnet" },
   { id: "haiku", label: "Haiku" },
+];
+
+export const THINKING_LEVELS: { id: ThinkingLevel; label: string }[] = [
+  { id: "off", label: "No thinking" },
+  { id: "normal", label: "Think" },
+  { id: "high", label: "Think hard" },
 ];
 
 export const DEFAULT_SETTINGS: BuddySettings = {
@@ -64,9 +70,7 @@ export class BuddySettingTab extends PluginSettingTab {
           });
         })
         .addDropdown((d) => {
-          d.addOption("off", "No thinking");
-          d.addOption("normal", "Think");
-          d.addOption("high", "Think hard");
+          for (const t of THINKING_LEVELS) d.addOption(t.id, t.label);
           d.setValue(cfg.thinking).onChange(async (v) => {
             cfg.thinking = v as ThinkingLevel;
             await this.plugin.saveSettings();
@@ -85,9 +89,12 @@ export class BuddySettingTab extends PluginSettingTab {
       .setName("Formatting style guide")
       .setDesc("Describe how you like notes formatted. Injected into Refine.")
       .addTextArea((t) => {
-        t.setValue(this.plugin.settings.styleGuide).onChange(async (v) => {
+        // Debounce: each save rewrites the whole data file (settings + all threads),
+        // so don't do it on every keystroke of a multi-paragraph guide.
+        const save = debounce(() => this.plugin.saveSettings(), 500, true);
+        t.setValue(this.plugin.settings.styleGuide).onChange((v) => {
           this.plugin.settings.styleGuide = v;
-          await this.plugin.saveSettings();
+          save();
         });
         t.inputEl.rows = 6;
         t.inputEl.style.width = "100%";

@@ -75,8 +75,4 @@ export default class BuddyPlugin extends Plugin {
   async saveSettings() {
     await this.saveData({ settings: this.settings, threads: this.threads } as BuddyData);
   }
-
-  async saveThreads() {
-    await this.saveSettings();
-  }
 }

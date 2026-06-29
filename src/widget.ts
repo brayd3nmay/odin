@@ -5,7 +5,7 @@ import type { Target, EditorLike } from "./edit";
 import { diffLines } from "./diff";
 import { PROMPTS } from "./agent";
 import { newThread, addMessage, ChatThread } from "./history";
-import { MODELS } from "./settings";
+import { MODELS, THINKING_LEVELS, FeatureConfig } from "./settings";
 
 // Official Claude "spark" mark. Uses currentColor (not the brand orange) so it greys to
 // match Obsidian's other icons — muted by default, accent on hover via the widget CSS.
@@ -54,9 +54,7 @@ export class FloatingWidget {
     modelSel.onchange = async () => { this.plugin.settings.chat.model = modelSel.value; await this.plugin.saveSettings(); };
 
     const thinkSel = sel.createEl("select", { cls: "buddy-select" });
-    for (const [v, label] of [["off", "No thinking"], ["normal", "Think"], ["high", "Think hard"]]) {
-      thinkSel.createEl("option", { text: label, value: v });
-    }
+    for (const t of THINKING_LEVELS) thinkSel.createEl("option", { text: t.label, value: t.id });
     thinkSel.value = this.plugin.settings.chat.thinking;
     thinkSel.onchange = async () => {
       this.plugin.settings.chat.thinking = thinkSel.value as any;
@@ -66,7 +64,7 @@ export class FloatingWidget {
     const controls = header.createDiv({ cls: "buddy-controls" });
     const min = controls.createSpan({ cls: "buddy-ctl" });
     setIcon(min, "minus");
-    min.onclick = () => this.minimize();
+    min.onclick = () => this.close();
     const exp = controls.createSpan({ cls: "buddy-ctl" });
     setIcon(exp, "maximize-2");
     exp.onclick = () => this.expand();
@@ -106,7 +104,6 @@ export class FloatingWidget {
 
   open() { this.setMode("card"); }
   close() { this.setMode("collapsed"); }
-  minimize() { this.setMode("collapsed"); }
   toggle() { this.mode === "card" ? this.close() : this.open(); }
   expand() {
     this.expanded = !this.expanded;
@@ -121,41 +118,46 @@ export class FloatingWidget {
     return el;
   }
 
-  private featureCfg(kind: "fix" | "refine" | "gaps") {
-    const s = this.plugin.settings;
-    return kind === "fix" ? s.fixFormatting : kind === "refine" ? s.refine : s.findGaps;
+  private showError(el: HTMLElement, e: unknown) {
+    el.setText("Error: " + (e instanceof Error ? e.message : String(e)));
+    el.addClass("buddy-error");
+  }
+
+  private basePromptFor(kind: "fix" | "refine"): string {
+    return kind === "fix" ? PROMPTS.fixFormatting : PROMPTS.refine(this.plugin.settings.styleGuide);
+  }
+
+  // Renders the +/-/space diff lines into a styled box. Shared by the quick-action
+  // diff and chat's propose-edit diff so the two can't drift in markup.
+  private renderDiffLines(parent: HTMLElement, original: string, proposed: string) {
+    const pre = parent.createEl("pre", { cls: "buddy-diffbody" });
+    for (const op of diffLines(original, proposed)) {
+      pre.createDiv({ cls: `buddy-dl buddy-dl-${op.type}` })
+        .setText((op.type === "add" ? "+ " : op.type === "del" ? "- " : "  ") + op.text);
+    }
   }
 
   async runQuickAction(kind: "fix" | "refine" | "gaps") {
     this.open();
     if (kind === "gaps") return this.runGaps();
-    const tkind = kind as "fix" | "refine"; // narrowed: gaps handled above
+    // kind is now narrowed to "fix" | "refine"
     const view = this.plugin.activeMarkdownView();
     if (!view) { this.addMsg("buddy-error", "Open a note first."); return; }
     const editor = view.editor;
     const target = getTarget(editor);
     if (!target.text.trim()) { this.addMsg("buddy-error", "Nothing to format."); return; }
 
-    const cfg = this.featureCfg(tkind);
-    const prompt = tkind === "fix"
-      ? PROMPTS.fixFormatting
-      : PROMPTS.refine(this.plugin.settings.styleGuide);
-
-    const status = this.addMsg("buddy-status", tkind === "fix" ? "Fixing formatting…" : "Refining…");
+    const cfg = kind === "fix" ? this.plugin.settings.fixFormatting : this.plugin.settings.refine;
+    const status = this.addMsg("buddy-status", kind === "fix" ? "Fixing formatting…" : "Refining…");
     const abort = this.track(new AbortController());
     try {
-      const proposed = await this.plugin.agent.transform(prompt, target.text, {
+      const proposed = await this.plugin.agent.transform(this.basePromptFor(kind), target.text, {
         model: cfg.model, thinking: cfg.thinking, allowWeb: false, abort,
       });
       status.remove();
-      this.renderDiff(
-        target.text, proposed,
-        () => applyTarget(editor, target, proposed),
-        tkind, cfg, target, editor,
-      );
+      this.renderDiff(target.text, proposed, kind, cfg, target, editor);
     } catch (e) {
-      status.setText("Error: " + (e instanceof Error ? e.message : String(e)));
-      status.addClass("buddy-error");
+      this.showError(status, e);
     }
   }
 
@@ -178,8 +180,7 @@ export class FloatingWidget {
       status.remove();
       this.addMsg("buddy-report").setText(report);
     } catch (e) {
-      status.setText("Error: " + (e instanceof Error ? e.message : String(e)));
-      status.addClass("buddy-error");
+      this.showError(status, e);
     }
   }
 
@@ -205,25 +206,19 @@ export class FloatingWidget {
 
   private renderDiff(
     original: string, proposed: string,
-    onAccept: () => void,
     kind: "fix" | "refine",
-    cfg: { model: string; thinking: import("./settings").ThinkingLevel },
+    cfg: FeatureConfig,
     target: Target,
     editor: EditorLike,
   ) {
     const wrap = this.addMsg("buddy-diff");
-    const ops = diffLines(original, proposed);
-    const pre = wrap.createEl("pre", { cls: "buddy-diffbody" });
-    for (const op of ops) {
-      const line = pre.createDiv({ cls: `buddy-dl buddy-dl-${op.type}` });
-      line.setText((op.type === "add" ? "+ " : op.type === "del" ? "- " : "  ") + op.text);
-    }
+    this.renderDiffLines(wrap, original, proposed);
     const actions = wrap.createDiv({ cls: "buddy-diff-actions" });
     const accept = actions.createEl("button", { text: "Accept", cls: "mod-cta" });
     const reject = actions.createEl("button", { text: "Reject" });
     const steerInput = actions.createEl("input", { cls: "buddy-steer", attr: { placeholder: "Steer (e.g. also bold key terms)…" } });
 
-    accept.onclick = () => { onAccept(); wrap.empty(); wrap.setText("✓ Applied."); };
+    accept.onclick = () => { applyTarget(editor, target, proposed); wrap.empty(); wrap.setText("✓ Applied."); };
     reject.onclick = () => { wrap.empty(); wrap.setText("Discarded."); };
     steerInput.onkeydown = async (ev: KeyboardEvent) => {
       if (ev.key !== "Enter" || !steerInput.value.trim()) return;
@@ -231,17 +226,16 @@ export class FloatingWidget {
       wrap.remove();
       const status = this.addMsg("buddy-status", "Updating…");
       const abort = this.track(new AbortController());
-      const basePrompt = kind === "fix" ? PROMPTS.fixFormatting : PROMPTS.refine(this.plugin.settings.styleGuide);
-      const followPrompt = `${basePrompt}\n\nThe user reviewed your previous result and asks: "${instruction}". ` +
+      const followPrompt = `${this.basePromptFor(kind)}\n\nThe user reviewed your previous result and asks: "${instruction}". ` +
         `Apply that to the text below (which is the ORIGINAL note, not your previous output).`;
       try {
         const next = await this.plugin.agent.transform(followPrompt, original, {
           model: cfg.model, thinking: cfg.thinking, allowWeb: false, abort,
         });
         status.remove();
-        this.renderDiff(original, next, () => applyTarget(editor, target, next), kind, cfg, target, editor);
+        this.renderDiff(original, next, kind, cfg, target, editor);
       } catch (e) {
-        status.setText("Error: " + (e instanceof Error ? e.message : String(e)));
+        this.showError(status, e);
       }
     };
   }
@@ -279,11 +273,10 @@ export class FloatingWidget {
         status.remove();
         addMessage(thread, "assistant", reply);
         this.addMsg("buddy-assistant").setText(reply);
-        await this.plugin.saveThreads();
+        await this.plugin.saveSettings();
       } catch (e) {
-        status.setText("Error: " + (e instanceof Error ? e.message : String(e)));
-        status.addClass("buddy-error");
-        await this.plugin.saveThreads();
+        this.showError(status, e);
+        await this.plugin.saveSettings();
       }
     } finally {
       this.busy = false;
@@ -295,17 +288,21 @@ export class FloatingWidget {
     return c;
   }
 
+  // Reject any in-flight ask/propose promises so awaiting callers unblock.
+  private clearPending() {
+    if (this.pendingPropose) { const r = this.pendingPropose; this.pendingPropose = null; r(false); }
+    if (this.pendingAsk) { const r = this.pendingAsk; this.pendingAsk = null; r(""); }
+  }
+
   private cancelAll() {
     for (const c of this.aborters) c.abort();
     this.aborters.clear();
-    if (this.pendingPropose) { const r = this.pendingPropose; this.pendingPropose = null; r(false); }
-    if (this.pendingAsk) { const r = this.pendingAsk; this.pendingAsk = null; r(""); }
+    this.clearPending();
     // ponytail: completed controllers stay in aborters until cancelAll clears them — aborting settled controllers is a harmless no-op
   }
 
   private resetStream() {
-    if (this.pendingPropose) { const r = this.pendingPropose; this.pendingPropose = null; r(false); }
-    if (this.pendingAsk) { const r = this.pendingAsk; this.pendingAsk = null; r(""); }
+    this.clearPending();
     this.streamEl.empty();
   }
 
@@ -318,10 +315,7 @@ export class FloatingWidget {
       const editor = view.editor;
       const original = editor.getValue();
       const wrap = this.addMsg("buddy-diff");
-      for (const op of diffLines(original, content)) {
-        wrap.createEl("pre", { cls: `buddy-dl buddy-dl-${op.type}` })
-          .setText((op.type === "add" ? "+ " : op.type === "del" ? "- " : "  ") + op.text);
-      }
+      this.renderDiffLines(wrap, original, content);
       const actions = wrap.createDiv({ cls: "buddy-diff-actions" });
       const accept = actions.createEl("button", { text: "Accept", cls: "mod-cta" });
       const reject = actions.createEl("button", { text: "Reject" });
@@ -344,7 +338,7 @@ export class FloatingWidget {
       del.onclick = async () => {
         this.plugin.threads = this.plugin.threads.filter((x) => x.id !== t.id);
         if (this.thread?.id === t.id) this.thread = null;
-        await this.plugin.saveThreads();
+        await this.plugin.saveSettings();
         this.showHistory();
       };
     }
@@ -357,6 +351,4 @@ export class FloatingWidget {
       this.addMsg(m.role === "user" ? "buddy-user" : "buddy-assistant").setText(m.text);
     }
   }
-
-  focusChat() { this.open(); }
 }
