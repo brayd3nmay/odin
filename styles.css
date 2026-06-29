@@ -47,3 +47,8 @@
 .buddy-dl-same { color: var(--text-muted); }
 .buddy-diff-actions { display: flex; gap: 6px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
 .buddy-steer { flex: 1; min-width: 140px; }
+
+.buddy-report { white-space: pre-wrap; }
+.buddy-ask { background: var(--background-secondary); border-radius: 6px; padding: 8px; }
+.buddy-ask-q { font-weight: 600; margin-bottom: 4px; }
+.buddy-ask-input { width: 100%; }

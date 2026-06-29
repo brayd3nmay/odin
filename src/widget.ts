@@ -123,9 +123,46 @@ export class FloatingWidget {
     }
   }
 
-  // ponytail: placeholder until Task 10 wires up the real implementation.
   private async runGaps() {
-    this.addMsg("buddy-status", "Find Gaps is wired up in a later step.");
+    const view = this.plugin.activeMarkdownView();
+    if (!view) { this.addMsg("buddy-error", "Open a note first."); return; }
+    const text = view.editor.getValue();
+    if (!text.trim()) { this.addMsg("buddy-error", "This note is empty."); return; }
+
+    const cfg = this.plugin.settings.findGaps;
+    const status = this.addMsg("buddy-status", "Looking for gaps…");
+    const abort = new AbortController();
+    try {
+      const report = await this.plugin.agent.analysis(
+        PROMPTS.findGaps,
+        `Here is my note. Find gaps and quiz me.\n\n---\n${text}`,
+        { onAskUser: (q) => this.askUser(q), onProgress: (t) => status.setText(t) },
+        { model: cfg.model, thinking: cfg.thinking, allowWeb: this.plugin.settings.allowWeb, abort },
+      );
+      status.remove();
+      this.addMsg("buddy-report").setText(report);
+    } catch (e) {
+      status.setText("Error: " + (e instanceof Error ? e.message : String(e)));
+      status.addClass("buddy-error");
+    }
+  }
+
+  // Renders a question with an input; resolves when the user answers. Used as the ask_user handler.
+  askUser(question: string): Promise<string> {
+    return new Promise((resolve) => {
+      const box = this.addMsg("buddy-ask");
+      box.createDiv({ cls: "buddy-ask-q", text: question });
+      const input = box.createEl("input", { cls: "buddy-ask-input", attr: { placeholder: "Your answer…" } });
+      input.focus();
+      input.onkeydown = (ev: KeyboardEvent) => {
+        if (ev.key === "Enter" && input.value.trim()) {
+          const answer = input.value.trim();
+          box.empty();
+          box.setText(`You: ${answer}`);
+          resolve(answer);
+        }
+      };
+    });
   }
 
   private renderDiff(
