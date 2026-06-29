@@ -1,1 +1,34 @@
 /* obsidian-buddy styles — see Task 7 */
+
+.buddy-root { position: fixed; right: 20px; bottom: 36px; z-index: var(--layer-popover); }
+
+.buddy-bubble {
+  width: 44px; height: 44px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--background-secondary); color: var(--text-muted);
+  border: 1px solid var(--background-modifier-border);
+  box-shadow: var(--shadow-s); cursor: pointer;
+}
+.buddy-bubble:hover { color: var(--interactive-accent); }
+.buddy-bubble.is-hidden { display: none; }
+
+.buddy-card {
+  display: none; flex-direction: column;
+  width: 380px; height: 520px; max-height: 80vh;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 12px; box-shadow: var(--shadow-l); overflow: hidden;
+}
+.buddy-card.is-open { display: flex; }
+.buddy-card.is-expanded { width: 560px; height: 720px; }
+
+.buddy-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 12px; border-bottom: 1px solid var(--background-modifier-border);
+}
+.buddy-title { display: flex; align-items: center; gap: 6px; font-weight: 600; }
+.buddy-controls { display: flex; gap: 8px; }
+.buddy-ctl { cursor: pointer; color: var(--text-muted); }
+.buddy-ctl:hover { color: var(--text-normal); }
+
+.buddy-stream { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
