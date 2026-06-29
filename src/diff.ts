@@ -2,8 +2,8 @@ export type DiffOp = { type: "same" | "add" | "del"; text: string };
 
 // Classic LCS line diff. Small inputs (a single note), so O(n*m) is fine.
 export function diffLines(oldText: string, newText: string): DiffOp[] {
-  const a = oldText.split("\n");
-  const b = newText.split("\n");
+  const a = oldText === "" ? [] : oldText.split("\n");
+  const b = newText === "" ? [] : newText.split("\n");
   const n = a.length;
   const m = b.length;
   const dp: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));

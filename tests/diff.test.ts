@@ -17,4 +17,22 @@ describe("diffLines", () => {
       { type: "add", text: "b" },
     ]);
   });
+
+  it("returns empty for two empty strings", () => {
+    expect(diffLines("", "")).toEqual([]);
+  });
+
+  it("treats an empty original as all additions", () => {
+    expect(diffLines("", "x\ny")).toEqual([
+      { type: "add", text: "x" },
+      { type: "add", text: "y" },
+    ]);
+  });
+
+  it("treats an empty new text as all deletions", () => {
+    expect(diffLines("a\nb", "")).toEqual([
+      { type: "del", text: "a" },
+      { type: "del", text: "b" },
+    ]);
+  });
 });
