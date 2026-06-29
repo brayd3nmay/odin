@@ -9,7 +9,7 @@ A floating Claude assistant for [Obsidian](https://obsidian.md/) that fixes form
 - **Obsidian** 1.5.0+
 - **Claude Code CLI** installed and logged in. Install it via:
   ```bash
-  npm install -g @anthropic-ai/claude
+  npm install -g @anthropic-ai/claude-code
   ```
   Then log in:
   ```bash
