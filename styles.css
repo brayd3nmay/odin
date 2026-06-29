@@ -63,3 +63,4 @@
 .buddy-hist-row { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; }
 .buddy-hist-title { cursor: pointer; }
 .buddy-hist-title:hover { color: var(--interactive-accent); }
+.buddy-history { display: flex; flex-direction: column; gap: 4px; padding: 4px 0; }

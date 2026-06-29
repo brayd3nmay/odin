@@ -22,6 +22,7 @@ export class FloatingWidget {
   private mode: Mode = "collapsed";
   private expanded = false;
   private thread: ChatThread | null = null;
+  private pendingPropose: ((accepted: boolean) => void) | null = null;
 
   constructor(private plugin: BuddyPlugin) {
     this.root = document.body.createDiv({ cls: "buddy-root" });
@@ -271,7 +272,17 @@ export class FloatingWidget {
     } catch (e) {
       status.setText("Error: " + (e instanceof Error ? e.message : String(e)));
       status.addClass("buddy-error");
+      await this.plugin.saveThreads();
     }
+  }
+
+  private resetStream() {
+    if (this.pendingPropose) {
+      const r = this.pendingPropose;
+      this.pendingPropose = null;
+      r(false);
+    }
+    this.streamEl.empty();
   }
 
   // Chat's only way to edit: diff the active note's current content against the proposal.
@@ -279,6 +290,7 @@ export class FloatingWidget {
     return new Promise((resolve) => {
       const view = this.plugin.activeMarkdownView();
       if (!view) { this.addMsg("buddy-error", "No open note to edit."); resolve(false); return; }
+      this.pendingPropose = resolve;
       const editor = view.editor;
       const original = editor.getValue();
       const wrap = this.addMsg("buddy-diff");
@@ -289,16 +301,16 @@ export class FloatingWidget {
       const actions = wrap.createDiv({ cls: "buddy-diff-actions" });
       const accept = actions.createEl("button", { text: "Accept", cls: "mod-cta" });
       const reject = actions.createEl("button", { text: "Reject" });
-      accept.onclick = () => { applyTarget(editor, { text: original, isSelection: false }, content); wrap.setText("✓ Applied."); resolve(true); };
-      reject.onclick = () => { wrap.setText("Rejected."); resolve(false); };
+      accept.onclick = () => { this.pendingPropose = null; applyTarget(editor, { text: original, isSelection: false }, content); wrap.setText("✓ Applied."); resolve(true); };
+      reject.onclick = () => { this.pendingPropose = null; wrap.setText("Rejected."); resolve(false); };
     });
   }
 
   private showHistory() {
-    this.streamEl.empty();
+    this.resetStream();
     const list = this.addMsg("buddy-history");
     const nw = list.createEl("button", { text: "+ New chat", cls: "mod-cta" });
-    nw.onclick = () => { this.thread = null; this.streamEl.empty(); };
+    nw.onclick = () => { this.thread = null; this.resetStream(); };
     for (const t of this.plugin.threads) {
       const row = list.createDiv({ cls: "buddy-hist-row" });
       const open = row.createSpan({ cls: "buddy-hist-title", text: t.title });
@@ -316,7 +328,7 @@ export class FloatingWidget {
 
   private loadThread(t: ChatThread) {
     this.thread = t;
-    this.streamEl.empty();
+    this.resetStream();
     for (const m of t.messages) {
       this.addMsg(m.role === "user" ? "buddy-user" : "buddy-assistant").setText(m.text);
     }
