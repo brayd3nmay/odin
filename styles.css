@@ -52,3 +52,14 @@
 .buddy-ask { background: var(--background-secondary); border-radius: 6px; padding: 8px; }
 .buddy-ask-q { font-weight: 600; margin-bottom: 4px; }
 .buddy-ask-input { width: 100%; }
+
+.buddy-selectors { display: flex; gap: 4px; }
+.buddy-select { font-size: 11px; background: var(--background-secondary); border: 1px solid var(--background-modifier-border); border-radius: 4px; }
+.buddy-footer { display: flex; gap: 6px; align-items: flex-end; padding: 8px; border-top: 1px solid var(--background-modifier-border); }
+.buddy-input { flex: 1; resize: none; max-height: 120px; }
+.buddy-send, .buddy-hist-btn { display: flex; align-items: center; justify-content: center; }
+.buddy-user { align-self: flex-end; background: var(--interactive-accent); color: var(--text-on-accent); padding: 6px 10px; border-radius: 10px; max-width: 85%; }
+.buddy-assistant { align-self: flex-start; background: var(--background-secondary); padding: 6px 10px; border-radius: 10px; max-width: 85%; white-space: pre-wrap; }
+.buddy-hist-row { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; }
+.buddy-hist-title { cursor: pointer; }
+.buddy-hist-title:hover { color: var(--interactive-accent); }

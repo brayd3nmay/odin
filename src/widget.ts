@@ -4,6 +4,8 @@ import { getTarget, applyTarget } from "./edit";
 import type { Target, EditorLike } from "./edit";
 import { diffLines } from "./diff";
 import { PROMPTS } from "./agent";
+import { newThread, addMessage, ChatThread } from "./history";
+import { MODELS } from "./settings";
 
 // Anthropic glyph as an inline SVG path (themed via currentColor).
 const ANTHROPIC_SVG =
@@ -19,6 +21,7 @@ export class FloatingWidget {
   private streamEl!: HTMLElement;
   private mode: Mode = "collapsed";
   private expanded = false;
+  private thread: ChatThread | null = null;
 
   constructor(private plugin: BuddyPlugin) {
     this.root = document.body.createDiv({ cls: "buddy-root" });
@@ -37,6 +40,22 @@ export class FloatingWidget {
     const title = header.createDiv({ cls: "buddy-title" });
     title.innerHTML = ANTHROPIC_SVG;
     title.createSpan({ text: "Claude" });
+
+    const sel = header.createDiv({ cls: "buddy-selectors" });
+    const modelSel = sel.createEl("select", { cls: "buddy-select" });
+    for (const m of MODELS) modelSel.createEl("option", { text: m.label, value: m.id });
+    modelSel.value = this.plugin.settings.chat.model;
+    modelSel.onchange = async () => { this.plugin.settings.chat.model = modelSel.value; await this.plugin.saveSettings(); };
+
+    const thinkSel = sel.createEl("select", { cls: "buddy-select" });
+    for (const [v, label] of [["off", "No thinking"], ["normal", "Think"], ["high", "Think hard"]]) {
+      thinkSel.createEl("option", { text: label, value: v });
+    }
+    thinkSel.value = this.plugin.settings.chat.thinking;
+    thinkSel.onchange = async () => {
+      this.plugin.settings.chat.thinking = thinkSel.value as any;
+      await this.plugin.saveSettings();
+    };
 
     const controls = header.createDiv({ cls: "buddy-controls" });
     const min = controls.createSpan({ cls: "buddy-ctl" });
@@ -59,7 +78,17 @@ export class FloatingWidget {
     chip("Find Gaps", "gaps");
 
     this.streamEl = this.card.createDiv({ cls: "buddy-stream" });
-    // chat input added in Task 11.
+
+    const footer = this.card.createDiv({ cls: "buddy-footer" });
+    const histBtn = footer.createEl("button", { cls: "buddy-hist-btn" });
+    setIcon(histBtn, "history");
+    histBtn.onclick = () => this.showHistory();
+    const input = footer.createEl("textarea", { cls: "buddy-input", attr: { placeholder: "Ask anything…", rows: "1" } });
+    const send = footer.createEl("button", { cls: "buddy-send mod-cta" });
+    setIcon(send, "arrow-up");
+    const submit = () => { const v = input.value.trim(); if (v) { input.value = ""; this.sendChat(v); } };
+    send.onclick = submit;
+    input.onkeydown = (ev: KeyboardEvent) => { if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); submit(); } };
   }
 
   private setMode(mode: Mode) {
@@ -206,6 +235,91 @@ export class FloatingWidget {
         status.setText("Error: " + (e instanceof Error ? e.message : String(e)));
       }
     };
+  }
+
+  private ensureThread() {
+    if (!this.thread) {
+      this.thread = newThread(crypto.randomUUID(), Date.now());
+      this.plugin.threads.unshift(this.thread);
+    }
+    return this.thread;
+  }
+
+  private async sendChat(text: string) {
+    this.open();
+    const thread = this.ensureThread();
+    addMessage(thread, "user", text);
+    this.addMsg("buddy-user").setText(text);
+    const status = this.addMsg("buddy-status", "Thinking…");
+    const cfg = this.plugin.settings.chat;
+    const abort = new AbortController();
+
+    const ui = {
+      onAskUser: (q: string) => this.askUser(q),
+      onProposeEdit: (content: string, summary: string) => this.proposeEdit(content, summary),
+      onProgress: (t: string) => status.setText(t),
+    };
+    try {
+      const { text: reply, sessionId } = await this.plugin.agent.chat(text, thread.sessionId, ui, {
+        model: cfg.model, thinking: cfg.thinking, allowWeb: this.plugin.settings.allowWeb, abort,
+      });
+      thread.sessionId = sessionId;
+      status.remove();
+      addMessage(thread, "assistant", reply);
+      this.addMsg("buddy-assistant").setText(reply);
+      await this.plugin.saveThreads();
+    } catch (e) {
+      status.setText("Error: " + (e instanceof Error ? e.message : String(e)));
+      status.addClass("buddy-error");
+    }
+  }
+
+  // Chat's only way to edit: diff the active note's current content against the proposal.
+  private proposeEdit(content: string, _summary: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      const view = this.plugin.activeMarkdownView();
+      if (!view) { this.addMsg("buddy-error", "No open note to edit."); resolve(false); return; }
+      const editor = view.editor;
+      const original = editor.getValue();
+      const wrap = this.addMsg("buddy-diff");
+      for (const op of diffLines(original, content)) {
+        wrap.createEl("pre", { cls: `buddy-dl buddy-dl-${op.type}` })
+          .setText((op.type === "add" ? "+ " : op.type === "del" ? "- " : "  ") + op.text);
+      }
+      const actions = wrap.createDiv({ cls: "buddy-diff-actions" });
+      const accept = actions.createEl("button", { text: "Accept", cls: "mod-cta" });
+      const reject = actions.createEl("button", { text: "Reject" });
+      accept.onclick = () => { applyTarget(editor, { text: original, isSelection: false }, content); wrap.setText("✓ Applied."); resolve(true); };
+      reject.onclick = () => { wrap.setText("Rejected."); resolve(false); };
+    });
+  }
+
+  private showHistory() {
+    this.streamEl.empty();
+    const list = this.addMsg("buddy-history");
+    const nw = list.createEl("button", { text: "+ New chat", cls: "mod-cta" });
+    nw.onclick = () => { this.thread = null; this.streamEl.empty(); };
+    for (const t of this.plugin.threads) {
+      const row = list.createDiv({ cls: "buddy-hist-row" });
+      const open = row.createSpan({ cls: "buddy-hist-title", text: t.title });
+      open.onclick = () => this.loadThread(t);
+      const del = row.createSpan({ cls: "buddy-ctl" });
+      setIcon(del, "trash");
+      del.onclick = async () => {
+        this.plugin.threads = this.plugin.threads.filter((x) => x.id !== t.id);
+        if (this.thread?.id === t.id) this.thread = null;
+        await this.plugin.saveThreads();
+        this.showHistory();
+      };
+    }
+  }
+
+  private loadThread(t: ChatThread) {
+    this.thread = t;
+    this.streamEl.empty();
+    for (const m of t.messages) {
+      this.addMsg(m.role === "user" ? "buddy-user" : "buddy-assistant").setText(m.text);
+    }
   }
 
   focusChat() { this.open(); }
