@@ -32,3 +32,18 @@
 .buddy-ctl:hover { color: var(--text-normal); }
 
 .buddy-stream { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+
+.buddy-chips { display: flex; gap: 6px; padding: 8px 12px; flex-wrap: wrap; border-bottom: 1px solid var(--background-modifier-border); }
+.buddy-chip { padding: 3px 10px; border-radius: 999px; background: var(--background-secondary); border: 1px solid var(--background-modifier-border); cursor: pointer; font-size: 12px; }
+.buddy-chip:hover { background: var(--background-modifier-hover); }
+
+.buddy-msg { font-size: 13px; line-height: 1.4; }
+.buddy-status { color: var(--text-muted); font-style: italic; }
+.buddy-error { color: var(--text-error); }
+
+.buddy-diffbody { max-height: 240px; overflow: auto; margin: 0; padding: 8px; background: var(--background-secondary); border-radius: 6px; font-size: 12px; white-space: pre-wrap; }
+.buddy-dl-add { color: var(--text-success); }
+.buddy-dl-del { color: var(--text-error); text-decoration: line-through; opacity: 0.8; }
+.buddy-dl-same { color: var(--text-muted); }
+.buddy-diff-actions { display: flex; gap: 6px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
+.buddy-steer { flex: 1; min-width: 140px; }

@@ -32,6 +32,28 @@ export default class BuddyPlugin extends Plugin {
       callback: () => this.widget.toggle(),
     });
 
+    const actions: { id: string; name: string; kind: "fix" | "refine" | "gaps" }[] = [
+      { id: "fix-formatting", name: "Fix Formatting", kind: "fix" },
+      { id: "refine-note", name: "Refine", kind: "refine" },
+      { id: "find-gaps", name: "Find Gaps", kind: "gaps" },
+    ];
+    for (const a of actions) {
+      this.addCommand({
+        id: a.id,
+        name: a.name,
+        editorCallback: () => this.widget.runQuickAction(a.kind),
+      });
+    }
+    this.registerEvent(
+      this.app.workspace.on("editor-menu", (menu) => {
+        for (const a of actions) {
+          menu.addItem((item) =>
+            item.setTitle(`Claude: ${a.name}`).setIcon("sparkles").onClick(() => this.widget.runQuickAction(a.kind)),
+          );
+        }
+      }),
+    );
+
     console.log("Obsidian Buddy loaded");
   }
 
