@@ -1,0 +1,26 @@
+{
+  "name": "obsidian-buddy",
+  "version": "0.1.0",
+  "description": "Floating Claude assistant for Obsidian.",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+    "test": "vitest run"
+  },
+  "keywords": [],
+  "author": "Brayden May",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22",
+    "builtin-modules": "^4",
+    "esbuild": "^0.25",
+    "obsidian": "latest",
+    "typescript": "^5.6",
+    "vitest": "^2"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "latest",
+    "zod": "^4"
+  }
+}

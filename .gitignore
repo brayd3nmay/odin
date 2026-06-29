@@ -2,3 +2,5 @@ docs/superpowers/
 node_modules/
 .claude/
 .superpowers/
+main.js
+*.js.map
