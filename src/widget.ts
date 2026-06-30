@@ -229,7 +229,7 @@ export class FloatingWidget {
     this.bubble = this.root.createEl("button", { cls: "odin-bubble" });
     setTooltip(this.bubble, "Open Odin");
     this.bubble.setAttr("aria-label", "Open Odin");
-    html(this.bubble, brandMark(this.plugin.settings.provider));
+    html(this.bubble, brandMark(this.plugin.settings.chat.provider));
     this.bubble.onclick = () => this.open();
     this.card = this.root.createDiv({ cls: "odin-card", attr: { role: "dialog", "aria-label": "Odin chat" } });
     this.buildChrome();
@@ -241,7 +241,7 @@ export class FloatingWidget {
     const header = this.card.createDiv({ cls: "odin-header" });
     const title = header.createDiv({ cls: "odin-title" });
     this.titleSpark = title.createSpan({ cls: "odin-title-spark" });
-    html(this.titleSpark, brandMark(this.plugin.settings.provider));
+    html(this.titleSpark, brandMark(this.plugin.settings.chat.provider));
     title.createSpan({ text: "Odin" });
     header.createDiv({ cls: "odin-spacer" });
     this.iconBtn(header, "plus", "New chat", () => this.newChat());
@@ -403,7 +403,7 @@ export class FloatingWidget {
 
   // Re-render the brand marks (bubble, header, empty-state spark) after the provider changes.
   refreshBrand() {
-    const mark = brandMark(this.plugin.settings.provider);
+    const mark = brandMark(this.plugin.settings.chat.provider);
     html(this.bubble, mark);
     html(this.titleSpark, mark);
     const empty = this.streamEl.querySelector<HTMLElement>(".odin-empty-spark");
@@ -464,7 +464,7 @@ export class FloatingWidget {
   private maybeEmpty() {
     if (this.streamEl.childElementCount) return;
     const e = this.streamEl.createDiv({ cls: "odin-empty" });
-    html(e.createSpan({ cls: "odin-empty-spark" }), brandMark(this.plugin.settings.provider));
+    html(e.createSpan({ cls: "odin-empty-spark" }), brandMark(this.plugin.settings.chat.provider));
     e.createDiv({ text: "Ask about your notes, or type / for commands." });
   }
   private clearEmpty() { this.streamEl.querySelector(".odin-empty")?.remove(); }
