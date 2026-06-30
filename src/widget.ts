@@ -1,6 +1,6 @@
 import { Menu, setTooltip, setIcon } from "obsidian";
 import type { EditorView } from "@codemirror/view";
-import type BuddyPlugin from "./main";
+import type OdinPlugin from "./main";
 import { getRegion, applyRegion, Region, LineEditor } from "./edit";
 import { showDiff, hideDiff } from "./editor-diff";
 import { planDiff } from "./diffplan";
@@ -37,23 +37,23 @@ class Thinking {
   private done = false;
 
   constructor(parent: HTMLElement, private scroll: () => void) {
-    this.el = parent.createDiv({ cls: "buddy-think is-collapsed" });
-    this.head = this.el.createDiv({ cls: "buddy-think-head" });
+    this.el = parent.createDiv({ cls: "odin-think is-collapsed" });
+    this.head = this.el.createDiv({ cls: "odin-think-head" });
     this.head.onclick = () => this.el.toggleClass("is-collapsed", !this.el.hasClass("is-collapsed"));
-    this.steps = this.el.createDiv({ cls: "buddy-steps" });
-    this.reason = this.el.createDiv({ cls: "buddy-think-reason" });
+    this.steps = this.el.createDiv({ cls: "odin-steps" });
+    this.reason = this.el.createDiv({ cls: "odin-think-reason" });
     this.renderHead();
   }
 
   private renderHead() {
     this.head.empty();
-    setIcon(this.head.createSpan({ cls: "buddy-chev" }), "chevron-right");
+    setIcon(this.head.createSpan({ cls: "odin-chev" }), "chevron-right");
     if (this.done) {
       const secs = ((Date.now() - this.start) / 1000).toFixed(1);
       this.head.createSpan({ text: `Thought for ${secs}s` });
     } else {
-      this.head.createSpan({ cls: "buddy-spinner" });
-      this.head.createSpan({ cls: "buddy-think-label", text: "Thinking…" });
+      this.head.createSpan({ cls: "odin-spinner" });
+      this.head.createSpan({ cls: "odin-think-label", text: "Thinking…" });
     }
   }
 
@@ -61,9 +61,9 @@ class Thinking {
     const label = toolLabel(name);
     if (!label) return;
     this.markLastDone();
-    const step = this.steps.createDiv({ cls: "buddy-step is-live" });
-    html(step.createSpan({ cls: "buddy-step-ic" }), `<span class="buddy-spinner buddy-spinner-sm"></span>`);
-    step.createSpan({ cls: "buddy-step-tx", text: label });
+    const step = this.steps.createDiv({ cls: "odin-step is-live" });
+    html(step.createSpan({ cls: "odin-step-ic" }), `<span class="odin-spinner odin-spinner-sm"></span>`);
+    step.createSpan({ cls: "odin-step-tx", text: label });
     this.lastStep = step;
     this.scroll();
   }
@@ -77,7 +77,7 @@ class Thinking {
   private markLastDone() {
     if (this.lastStep) {
       this.lastStep.removeClass("is-live");
-      setIcon(this.lastStep.querySelector(".buddy-step-ic") as HTMLElement, "check");
+      setIcon(this.lastStep.querySelector(".odin-step-ic") as HTMLElement, "check");
     }
   }
 
@@ -118,30 +118,30 @@ export class FloatingWidget {
     steer: (instruction: string) => void;
   } | null = null;
 
-  constructor(private plugin: BuddyPlugin) {
-    this.root = document.body.createDiv({ cls: "buddy-root" });
-    this.bubble = this.root.createDiv({ cls: "buddy-bubble" });
+  constructor(private plugin: OdinPlugin) {
+    this.root = document.body.createDiv({ cls: "odin-root" });
+    this.bubble = this.root.createDiv({ cls: "odin-bubble" });
     html(this.bubble, CLAUDE_SPARK);
     this.bubble.onclick = () => this.open();
-    this.card = this.root.createDiv({ cls: "buddy-card" });
+    this.card = this.root.createDiv({ cls: "odin-card" });
     this.buildChrome();
     this.setMode("collapsed");
   }
 
   private buildChrome() {
-    const header = this.card.createDiv({ cls: "buddy-header" });
-    const title = header.createDiv({ cls: "buddy-title" });
-    html(title.createSpan({ cls: "buddy-title-spark" }), CLAUDE_SPARK);
+    const header = this.card.createDiv({ cls: "odin-header" });
+    const title = header.createDiv({ cls: "odin-title" });
+    html(title.createSpan({ cls: "odin-title-spark" }), CLAUDE_SPARK);
     title.createSpan({ text: "Claude" });
-    header.createDiv({ cls: "buddy-spacer" });
+    header.createDiv({ cls: "odin-spacer" });
     this.iconBtn(header, "plus", "New chat", () => this.newChat());
     const histBtn = this.iconBtn(header, "clock", "History", () => this.toggleHistory());
-    histBtn.addClass("buddy-hist");
-    header.createDiv({ cls: "buddy-divider" });
+    histBtn.addClass("odin-hist");
+    header.createDiv({ cls: "odin-divider" });
     this.iconBtn(header, "minus", "Minimize", () => this.close());
     this.iconBtn(header, "maximize-2", "Expand", () => this.expand());
 
-    this.streamEl = this.card.createDiv({ cls: "buddy-stream" });
+    this.streamEl = this.card.createDiv({ cls: "odin-stream" });
     // Track whether the user is parked at the bottom; if they scroll up to read (e.g. the
     // thinking), we stop auto-scrolling so streaming output doesn't yank them back down.
     this.streamEl.addEventListener("scroll", () => {
@@ -150,28 +150,28 @@ export class FloatingWidget {
     });
 
     // composer zone, wrapped so the edit-approval popup can float above it (anchored, not in-stream)
-    const composer = this.card.createDiv({ cls: "buddy-composer" });
-    this.editPop = composer.createDiv({ cls: "buddy-editpop" });
+    const composer = this.card.createDiv({ cls: "odin-composer" });
+    this.editPop = composer.createDiv({ cls: "odin-editpop" });
 
-    const actions = composer.createDiv({ cls: "buddy-actions" });
+    const actions = composer.createDiv({ cls: "odin-actions" });
     this.quickAction(actions, "fix", "list-checks", "Fix formatting");
     this.quickAction(actions, "refine", "wand-2", "Refine");
     this.quickAction(actions, "gaps", "search", "Find gaps");
 
-    const footer = composer.createDiv({ cls: "buddy-footer" });
-    this.field = footer.createDiv({ cls: "buddy-field" });
+    const footer = composer.createDiv({ cls: "odin-footer" });
+    this.field = footer.createDiv({ cls: "odin-field" });
     this.input = this.field.createEl("textarea", {
-      cls: "buddy-input",
+      cls: "odin-input",
       attr: { placeholder: "Ask anything…", rows: "1" },
     });
-    const bar = this.field.createDiv({ cls: "buddy-inbar" });
+    const bar = this.field.createDiv({ cls: "odin-inbar" });
     this.modelSel = this.ghostSelect(bar, (ev) =>
       this.pickerMenu(ev, MODELS, this.plugin.settings.chat.model, (id) => { this.plugin.settings.chat.model = id; }));
     this.thinkSel = this.ghostSelect(bar, (ev) =>
       this.pickerMenu(ev, THINKING_LEVELS, this.plugin.settings.chat.thinking, (id) => { this.plugin.settings.chat.thinking = id as ThinkingLevel; }));
-    bar.createDiv({ cls: "buddy-spacer" });
-    bar.createSpan({ cls: "buddy-esc-hint" });
-    this.send = bar.createEl("button", { cls: "buddy-send clickable-icon" });
+    bar.createDiv({ cls: "odin-spacer" });
+    bar.createSpan({ cls: "odin-esc-hint" });
+    this.send = bar.createEl("button", { cls: "odin-send clickable-icon" });
     setIcon(this.send, "send");
     setTooltip(this.send, "Send");
     this.send.onclick = () => (this.busy ? this.stop() : this.submit());
@@ -183,7 +183,7 @@ export class FloatingWidget {
   }
 
   private iconBtn(parent: HTMLElement, name: string, tip: string, onClick: () => void): HTMLElement {
-    const b = parent.createEl("button", { cls: "buddy-iconbtn clickable-icon" });
+    const b = parent.createEl("button", { cls: "odin-iconbtn clickable-icon" });
     setIcon(b, name);
     setTooltip(b, tip);
     b.onclick = onClick;
@@ -191,14 +191,14 @@ export class FloatingWidget {
   }
 
   private quickAction(parent: HTMLElement, kind: "fix" | "refine" | "gaps", name: string, label: string) {
-    const b = parent.createEl("button", { cls: `buddy-qa buddy-qa-${kind}` });
-    setIcon(b.createSpan({ cls: "buddy-qa-ic" }), name);
+    const b = parent.createEl("button", { cls: `odin-qa odin-qa-${kind}` });
+    setIcon(b.createSpan({ cls: "odin-qa-ic" }), name);
     b.createSpan({ text: label });
     b.onclick = () => this.runQuickAction(kind);
   }
 
   private ghostSelect(parent: HTMLElement, onClick: (ev: MouseEvent) => void): HTMLElement {
-    const b = parent.createEl("button", { cls: "buddy-ghostsel" });
+    const b = parent.createEl("button", { cls: "odin-ghostsel" });
     b.onclick = (ev) => onClick(ev);
     return b;
   }
@@ -208,9 +208,9 @@ export class FloatingWidget {
     const model = MODELS.find((m) => m.id === cfg.model)?.label ?? cfg.model;
     const think = THINKING_LEVELS.find((t) => t.id === cfg.thinking)?.label ?? cfg.thinking;
     this.modelSel.setText(model);
-    setIcon(this.modelSel.createSpan({ cls: "buddy-car" }), "chevron-down");
+    setIcon(this.modelSel.createSpan({ cls: "odin-car" }), "chevron-down");
     this.thinkSel.setText(think);
-    setIcon(this.thinkSel.createSpan({ cls: "buddy-car" }), "chevron-down");
+    setIcon(this.thinkSel.createSpan({ cls: "odin-car" }), "chevron-down");
   }
 
   private pickerMenu(ev: MouseEvent, items: { id: string; label: string }[], current: string, choose: (id: string) => void) {
@@ -239,7 +239,7 @@ export class FloatingWidget {
   destroy() { this.cancelAll(); this.root.remove(); }
 
   private addMsg(cls: string, text?: string): HTMLElement {
-    const el = this.streamEl.createDiv({ cls: `buddy-msg ${cls}` });
+    const el = this.streamEl.createDiv({ cls: `odin-msg ${cls}` });
     if (text) el.setText(text);
     this.scroll();
     return el;
@@ -248,12 +248,12 @@ export class FloatingWidget {
   private showError(el: HTMLElement, e: unknown) {
     if ((e as any)?.name === "AbortError") { el.remove(); return; }
     el.setText("Error: " + (e instanceof Error ? e.message : String(e)));
-    el.addClass("buddy-error");
+    el.addClass("odin-error");
   }
 
   // A streaming assistant reply: deltas append with a blinking caret until done.
   private newReply(): { append: (d: string) => void; done: () => void } {
-    const el = this.addMsg("buddy-assistant is-streaming");
+    const el = this.addMsg("odin-assistant is-streaming");
     return {
       append: (d) => { el.setText(el.getText() + d); this.scroll(); },
       done: () => el.removeClass("is-streaming"),
@@ -267,7 +267,7 @@ export class FloatingWidget {
     this.send.toggleClass("is-stop", on);
     setIcon(this.send, on ? "x" : "send");
     setTooltip(this.send, on ? "Stop" : "Send");
-    (this.card.querySelector(".buddy-esc-hint") as HTMLElement)?.setText(on ? "Esc to stop" : "");
+    (this.card.querySelector(".odin-esc-hint") as HTMLElement)?.setText(on ? "Esc to stop" : "");
   }
 
   private track(c: AbortController): AbortController { this.aborters.add(c); return c; }
@@ -302,10 +302,10 @@ export class FloatingWidget {
     if (this.busy) return;
     if (kind === "gaps") return this.runGaps();
     const view = this.plugin.activeMarkdownView();
-    if (!view) { this.addMsg("buddy-error", "Open a note first."); return; }
+    if (!view) { this.addMsg("odin-error", "Open a note first."); return; }
     const editor = view.editor as unknown as LineEditor;
     const region = getRegion(editor);
-    if (!region.text.trim()) { this.addMsg("buddy-error", "Nothing to format."); return; }
+    if (!region.text.trim()) { this.addMsg("odin-error", "Nothing to format."); return; }
 
     const cfg = kind === "fix" ? this.plugin.settings.fixFormatting : this.plugin.settings.refine;
     this.runTransform(view, editor, region, kind, cfg);
@@ -333,15 +333,15 @@ export class FloatingWidget {
     } catch (e) {
       thinking.collapse();
       this.setBusy(false);
-      this.showError(this.addMsg("buddy-status"), e);
+      this.showError(this.addMsg("odin-status"), e);
     }
   }
 
   private async runGaps() {
     const view = this.plugin.activeMarkdownView();
-    if (!view) { this.addMsg("buddy-error", "Open a note first."); return; }
+    if (!view) { this.addMsg("odin-error", "Open a note first."); return; }
     const text = view.editor.getValue();
-    if (!text.trim()) { this.addMsg("buddy-error", "This note is empty."); return; }
+    if (!text.trim()) { this.addMsg("odin-error", "This note is empty."); return; }
 
     const cfg = this.plugin.settings.findGaps;
     this.setBusy(true);
@@ -366,7 +366,7 @@ export class FloatingWidget {
     } catch (e) {
       thinking.collapse();
       this.setBusy(false);
-      this.showError(this.addMsg("buddy-status"), e);
+      this.showError(this.addMsg("odin-status"), e);
     }
   }
 
@@ -375,7 +375,7 @@ export class FloatingWidget {
     this.open();
     const thread = this.ensureThread();
     addMessage(thread, "user", text);
-    this.addMsg("buddy-user").setText(text);
+    this.addMsg("odin-user").setText(text);
     this.setBusy(true);
     const thinking = new Thinking(this.streamEl, () => this.scroll());
     const reply = this.lazyReply(() => thinking.collapse());
@@ -406,7 +406,7 @@ export class FloatingWidget {
       thinking.collapse();
       reply.discard();
       this.setBusy(false);
-      this.showError(this.addMsg("buddy-status"), e);
+      this.showError(this.addMsg("odin-status"), e);
       await this.plugin.saveSettings();
     }
   }
@@ -433,7 +433,7 @@ export class FloatingWidget {
     // No-op edit: nothing to add or delete → don't force a diff, just say so.
     const plan = planDiff(region.text, proposed);
     if (!plan.dels.length && !plan.adds.length) {
-      this.addMsg("buddy-status-ok", "No changes needed.");
+      this.addMsg("odin-status-ok", "No changes needed.");
       return Promise.resolve(false);
     }
     return new Promise((resolve) => {
@@ -441,29 +441,29 @@ export class FloatingWidget {
       this.clearDiff();
       showDiff(cm, region.fromLine, region.text, proposed);
 
-      // Approval prompt floats above the composer (see .buddy-editpop) so it stays put while the
+      // Approval prompt floats above the composer (see .odin-editpop) so it stays put while the
       // diff is reviewed, instead of scrolling away in the stream.
       const pop = this.editPop;
       pop.empty();
-      const head = pop.createDiv({ cls: "buddy-editpop-head" });
-      setIcon(head.createSpan({ cls: "buddy-editpop-ic" }), "file-text");
-      head.createSpan({ cls: "buddy-editpop-title", text: "Apply this edit to your note?" });
-      pop.createDiv({ cls: "buddy-editpop-sub", text: "Changes are highlighted in your note." });
-      const acts = pop.createDiv({ cls: "buddy-editacts" });
-      const accept = acts.createEl("button", { cls: "buddy-pb is-accept" });
-      setIcon(accept.createSpan({ cls: "buddy-pb-ic" }), "check");
+      const head = pop.createDiv({ cls: "odin-editpop-head" });
+      setIcon(head.createSpan({ cls: "odin-editpop-ic" }), "file-text");
+      head.createSpan({ cls: "odin-editpop-title", text: "Apply this edit to your note?" });
+      pop.createDiv({ cls: "odin-editpop-sub", text: "Changes are highlighted in your note." });
+      const acts = pop.createDiv({ cls: "odin-editacts" });
+      const accept = acts.createEl("button", { cls: "odin-pb is-accept" });
+      setIcon(accept.createSpan({ cls: "odin-pb-ic" }), "check");
       accept.createSpan({ text: "Accept" });
-      accept.createSpan({ cls: "buddy-kbd", text: "⌘↵" });
-      const reject = acts.createEl("button", { cls: "buddy-pb" });
+      accept.createSpan({ cls: "odin-kbd", text: "⌘↵" });
+      const reject = acts.createEl("button", { cls: "odin-pb" });
       reject.createSpan({ text: "Reject" });
-      reject.createSpan({ cls: "buddy-kbd", text: "Esc" });
+      reject.createSpan({ cls: "odin-kbd", text: "Esc" });
       pop.addClass("is-shown");
 
       this.enterSteer();
       const finish = (applied: boolean) => {
         this.exitSteer();
         this.clearDiff(); // also hides the popup
-        this.addMsg(applied ? "buddy-status-ok" : "buddy-status")
+        this.addMsg(applied ? "odin-status-ok" : "odin-status")
           .setText(applied ? "✓ Applied to your note." : "Discarded.");
         resolve(applied);
       };
@@ -498,7 +498,7 @@ export class FloatingWidget {
   // Chat's edit tool: diff the whole open note against the proposed content.
   private proposeEdit(content: string, _summary: string): Promise<boolean> {
     const view = this.plugin.activeMarkdownView();
-    if (!view) { this.addMsg("buddy-error", "No open note to edit."); return Promise.resolve(false); }
+    if (!view) { this.addMsg("odin-error", "No open note to edit."); return Promise.resolve(false); }
     const editor = view.editor as unknown as LineEditor;
     const region: Region = { fromLine: 0, toLine: editor.lineCount() - 1, text: view.editor.getValue() };
     return this.presentEdit(view, editor, region, content);
@@ -506,10 +506,10 @@ export class FloatingWidget {
 
   askUser(question: string): Promise<string> {
     return new Promise((resolve) => {
-      const box = this.addMsg("buddy-ask");
-      box.createDiv({ cls: "buddy-ask-q", text: question });
-      const input = box.createEl("input", { cls: "buddy-ask-input", attr: { placeholder: "Type your answer…" } });
-      box.createDiv({ cls: "buddy-ask-hint", text: "Enter to send" });
+      const box = this.addMsg("odin-ask");
+      box.createDiv({ cls: "odin-ask-q", text: question });
+      const input = box.createEl("input", { cls: "odin-ask-input", attr: { placeholder: "Type your answer…" } });
+      box.createDiv({ cls: "odin-ask-hint", text: "Enter to send" });
       input.focus();
       this.pendingAsk = resolve;
       input.onkeydown = (ev: KeyboardEvent) => {
@@ -553,17 +553,17 @@ export class FloatingWidget {
   private showHistory() {
     this.historyOpen = true;
     this.resetStream();
-    const list = this.addMsg("buddy-history");
+    const list = this.addMsg("odin-history");
     for (const t of this.plugin.threads) {
-      const row = list.createDiv({ cls: "buddy-hist-row" });
-      row.createSpan({ cls: "buddy-hist-title", text: t.title }).onclick = () => this.loadThread(t);
+      const row = list.createDiv({ cls: "odin-hist-row" });
+      row.createSpan({ cls: "odin-hist-title", text: t.title }).onclick = () => this.loadThread(t);
       const del = this.iconBtn(row, "x", "Delete", async () => {
         this.plugin.threads = this.plugin.threads.filter((x) => x.id !== t.id);
         if (this.thread?.id === t.id) this.thread = null;
         await this.plugin.saveSettings();
         this.showHistory();
       });
-      del.addClass("buddy-hist-del");
+      del.addClass("odin-hist-del");
     }
   }
   private loadThread(t: ChatThread) {
@@ -571,7 +571,7 @@ export class FloatingWidget {
     this.thread = t;
     this.resetStream();
     for (const m of t.messages) {
-      this.addMsg(m.role === "user" ? "buddy-user" : "buddy-assistant").setText(m.text);
+      this.addMsg(m.role === "user" ? "odin-user" : "odin-assistant").setText(m.text);
     }
   }
 }

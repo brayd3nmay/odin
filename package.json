@@ -1,5 +1,5 @@
 {
-  "name": "obsidian-buddy",
+  "name": "odin",
   "version": "0.1.0",
   "description": "Floating Claude assistant for Obsidian.",
   "main": "main.js",

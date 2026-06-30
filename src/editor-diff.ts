@@ -1,7 +1,7 @@
 // In-editor inline diff preview, rendered with CodeMirror 6 decorations (Obsidian provides CM6 at
 // runtime — see esbuild `external: ["@codemirror/*"]`). Deleted lines get a red line decoration;
 // added lines render as a green block widget *without mutating the document* — the note only
-// changes when the user accepts. Register `buddyDiffField` via plugin.registerEditorExtension.
+// changes when the user accepts. Register `odinDiffField` via plugin.registerEditorExtension.
 import { EditorView, Decoration, DecorationSet, WidgetType } from "@codemirror/view";
 import { StateField, StateEffect, Range } from "@codemirror/state";
 import { planDiff } from "./diffplan";
@@ -9,7 +9,7 @@ import { planDiff } from "./diffplan";
 const setDiff = StateEffect.define<DecorationSet>();
 const clearDiff = StateEffect.define<void>();
 
-export const buddyDiffField = StateField.define<DecorationSet>({
+export const odinDiffField = StateField.define<DecorationSet>({
   create: () => Decoration.none,
   update(deco, tr) {
     deco = deco.map(tr.changes);
@@ -32,11 +32,11 @@ class AddedLines extends WidgetType {
   }
   toDOM() {
     const wrap = document.createElement("div");
-    wrap.className = "buddy-cm-add";
+    wrap.className = "odin-cm-add";
     for (const l of this.lines) {
-      const row = wrap.createDiv({ cls: "buddy-cm-line" });
-      row.createSpan({ cls: "buddy-cm-mk", text: "+" });
-      row.createSpan({ cls: "buddy-cm-tx", text: l.length ? l : " " });
+      const row = wrap.createDiv({ cls: "odin-cm-line" });
+      row.createSpan({ cls: "odin-cm-mk", text: "+" });
+      row.createSpan({ cls: "odin-cm-tx", text: l.length ? l : " " });
     }
     return wrap;
   }
@@ -49,7 +49,7 @@ export function showDiff(view: EditorView, fromLine: number, original: string, p
   const ranges: Range<Decoration>[] = [];
   for (const d of plan.dels) {
     const ln = doc.line(fromLine + 1 + d); // doc.line() is 1-based
-    ranges.push(Decoration.line({ class: "buddy-cm-del" }).range(ln.from));
+    ranges.push(Decoration.line({ class: "odin-cm-del" }).range(ln.from));
   }
   for (const a of plan.adds) {
     const widget = new AddedLines(a.lines);

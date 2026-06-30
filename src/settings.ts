@@ -7,7 +7,7 @@ export interface FeatureConfig {
   thinking: ThinkingLevel;
 }
 
-export interface BuddySettings {
+export interface OdinSettings {
   fixFormatting: FeatureConfig;
   refine: FeatureConfig;
   findGaps: FeatureConfig;
@@ -29,7 +29,7 @@ export const THINKING_LEVELS: { id: ThinkingLevel; label: string }[] = [
   { id: "high", label: "Think hard" },
 ];
 
-export const DEFAULT_SETTINGS: BuddySettings = {
+export const DEFAULT_SETTINGS: OdinSettings = {
   fixFormatting: { model: "haiku", thinking: "off" },
   refine: { model: "sonnet", thinking: "normal" },
   findGaps: { model: "sonnet", thinking: "high" },
@@ -44,11 +44,11 @@ export function thinkingTokens(level: ThinkingLevel): number {
 }
 
 interface PluginLike {
-  settings: BuddySettings;
+  settings: OdinSettings;
   saveSettings(): Promise<void>;
 }
 
-export class BuddySettingTab extends PluginSettingTab {
+export class OdinSettingTab extends PluginSettingTab {
   constructor(app: App, private plugin: PluginLike) {
     super(app, plugin as any);
   }

@@ -131,8 +131,8 @@ export class AgentClient {
 
   // Read-only vault + optional web + ask_user. Used by Find Gaps.
   async analysis(systemPrompt: string, userText: string, ui: AgentUI, o: RunOpts): Promise<string> {
-    const buddy = createSdkMcpServer({
-      name: "buddy",
+    const odin = createSdkMcpServer({
+      name: "odin",
       version: "1.0.0",
       tools: [this.askUserTool(ui)],
     });
@@ -145,8 +145,8 @@ export class AgentClient {
         model: o.model,
         cwd: this.cfg.cwd,
         tools: builtins,
-        mcpServers: { buddy },
-        allowedTools: [...builtins, "mcp__buddy__ask_user"],
+        mcpServers: { odin },
+        allowedTools: [...builtins, "mcp__odin__ask_user"],
         pathToClaudeCodeExecutable: this.cfg.claudePath,
         abortController: o.abort,
         includePartialMessages: true,
@@ -169,10 +169,10 @@ export class AgentClient {
     // ponytail: any[] avoids the generic mismatch between SdkMcpToolDefinition<{question}> and SdkMcpToolDefinition<{new_content,summary}>
     const tools: any[] = [this.askUserTool(ui)];
     if (ui.onProposeEdit) tools.push(this.proposeEditTool(ui));
-    const buddy = createSdkMcpServer({ name: "buddy", version: "1.0.0", tools });
+    const odin = createSdkMcpServer({ name: "odin", version: "1.0.0", tools });
     const builtins = builtinTools(o.allowWeb);
-    const allowed = [...builtins, "mcp__buddy__ask_user"];
-    if (ui.onProposeEdit) allowed.push("mcp__buddy__propose_note_edit");
+    const allowed = [...builtins, "mcp__odin__ask_user"];
+    if (ui.onProposeEdit) allowed.push("mcp__odin__propose_note_edit");
 
     const messages: any[] = [];
     let sessionId = resumeSessionId ?? "";
@@ -183,7 +183,7 @@ export class AgentClient {
         model: o.model,
         cwd: this.cfg.cwd,
         tools: builtins,
-        mcpServers: { buddy },
+        mcpServers: { odin },
         allowedTools: allowed,
         resume: resumeSessionId,
         pathToClaudeCodeExecutable: this.cfg.claudePath,

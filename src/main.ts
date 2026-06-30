@@ -1,24 +1,24 @@
 import { Plugin, FileSystemAdapter, MarkdownView } from "obsidian";
-import { BuddySettings, DEFAULT_SETTINGS, BuddySettingTab } from "./settings";
+import { OdinSettings, DEFAULT_SETTINGS, OdinSettingTab } from "./settings";
 import { ChatThread } from "./history";
 import { AgentClient, resolveClaudePath } from "./agent";
 import { FloatingWidget } from "./widget";
-import { buddyDiffField } from "./editor-diff";
+import { odinDiffField } from "./editor-diff";
 
-interface BuddyData {
-  settings: BuddySettings;
+interface OdinData {
+  settings: OdinSettings;
   threads: ChatThread[];
 }
 
-export default class BuddyPlugin extends Plugin {
-  settings!: BuddySettings;
+export default class OdinPlugin extends Plugin {
+  settings!: OdinSettings;
   threads: ChatThread[] = [];
   agent!: AgentClient;
   widget!: FloatingWidget;
 
   async onload() {
     await this.loadAll();
-    this.addSettingTab(new BuddySettingTab(this.app, this));
+    this.addSettingTab(new OdinSettingTab(this.app, this));
 
     const basePath = (this.app.vault.adapter as FileSystemAdapter).getBasePath();
     this.agent = new AgentClient({
@@ -29,7 +29,7 @@ export default class BuddyPlugin extends Plugin {
 
     // Renders the in-editor inline diff preview (red deletions / green additions) when Claude
     // proposes an edit. Decorations only; the document is untouched until the user accepts.
-    this.registerEditorExtension(buddyDiffField);
+    this.registerEditorExtension(odinDiffField);
 
     this.addCommand({
       id: "toggle-claude-widget",
@@ -59,12 +59,12 @@ export default class BuddyPlugin extends Plugin {
       }),
     );
 
-    console.log("Obsidian Buddy loaded");
+    console.log("Odin loaded");
   }
 
   onunload() {
     this.widget?.destroy();
-    console.log("Obsidian Buddy unloaded");
+    console.log("Odin unloaded");
   }
 
   activeMarkdownView() {
@@ -72,12 +72,12 @@ export default class BuddyPlugin extends Plugin {
   }
 
   async loadAll() {
-    const data = (await this.loadData()) as BuddyData | null;
+    const data = (await this.loadData()) as OdinData | null;
     this.settings = Object.assign({}, DEFAULT_SETTINGS, data?.settings);
     this.threads = data?.threads ?? [];
   }
 
   async saveSettings() {
-    await this.saveData({ settings: this.settings, threads: this.threads } as BuddyData);
+    await this.saveData({ settings: this.settings, threads: this.threads } as OdinData);
   }
 }
