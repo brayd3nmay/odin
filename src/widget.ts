@@ -115,7 +115,7 @@ export class FloatingWidget {
     view: EditorView;
     accept: () => void;
     reject: () => void;
-    steer: (instruction: string) => void;
+    steer?: (instruction: string) => void; // absent for chat-tool edits (not re-runnable)
   } | null = null;
 
   constructor(private plugin: OdinPlugin) {
@@ -280,7 +280,10 @@ export class FloatingWidget {
     const v = this.input.value.trim();
     if (!v) return;
     this.input.value = "";
-    if (this.pendingDiff) { this.pendingDiff.steer(v); return; }
+    // A pending edit: hand the message to the chat agent (steer), which has a text channel, tools,
+    // and propose_note_edit — so it can answer or revise. Never the toolless transform. sendChat
+    // echoes the user bubble itself, so don't double-echo here.
+    if (this.pendingDiff) { this.pendingDiff.steer?.(v); return; }
     this.sendChat(v);
   }
   private onInputKey(ev: KeyboardEvent) {
@@ -311,25 +314,21 @@ export class FloatingWidget {
     this.runTransform(view, editor, region, kind, cfg);
   }
 
-  // One Fix/Refine pass over the region, then preview the result. A steering `instruction` (from
-  // reviewing a previous result) is folded into the prompt; the transform always re-runs against
-  // the ORIGINAL text, never its own output.
-  private async runTransform(view: any, editor: LineEditor, region: Region, kind: "fix" | "refine", cfg: FeatureConfig, instruction?: string) {
+  // One Fix/Refine pass over the region, then preview the result. Steering the preview goes through
+  // the chat agent (steerPrompt → sendChat), not another toolless transform — the transform can only
+  // emit note content, so it can't answer questions or use tools.
+  private async runTransform(view: any, editor: LineEditor, region: Region, kind: "fix" | "refine", cfg: FeatureConfig) {
     this.setBusy(true);
     const thinking = new Thinking(this.streamEl, () => this.scroll());
     const abort = this.track(new AbortController());
-    const prompt = instruction
-      ? `${this.basePromptFor(kind)}\n\nThe user reviewed your previous result and asks: "${instruction}". ` +
-        `Apply that to the text below (which is the ORIGINAL, not your previous output).`
-      : this.basePromptFor(kind);
     try {
-      const proposed = await this.plugin.agent.transform(prompt, region.text, {
+      const proposed = await this.plugin.agent.transform(this.basePromptFor(kind), region.text, {
         model: cfg.model, thinking: cfg.thinking, allowWeb: false, abort,
       }, { onThinking: (d) => thinking.reasoning(d) });
       thinking.collapse();
       this.setBusy(false);
       this.presentEdit(view, editor, region, proposed, (instr) =>
-        this.runTransform(view, editor, region, kind, cfg, instr));
+        this.sendChat(this.steerPrompt(proposed, instr), instr));
     } catch (e) {
       thinking.collapse();
       this.setBusy(false);
@@ -370,12 +369,14 @@ export class FloatingWidget {
     }
   }
 
-  private async sendChat(text: string) {
+  // `display` is what the user sees in their bubble; `text` is what the agent receives. They differ
+  // when steering an edit: the bubble shows the bare instruction, the prompt carries the proposal too.
+  private async sendChat(text: string, display: string = text) {
     if (this.busy) return;
     this.open();
     const thread = this.ensureThread();
-    addMessage(thread, "user", text);
-    this.addMsg("odin-user").setText(text);
+    addMessage(thread, "user", display);
+    this.addMsg("odin-user").setText(display);
     this.setBusy(true);
     const thinking = new Thinking(this.streamEl, () => this.scroll());
     const reply = this.lazyReply(() => thinking.collapse());
@@ -472,7 +473,7 @@ export class FloatingWidget {
         // Clear the preview decorations before mutating the doc so nothing maps through the change.
         accept: () => { this.clearDiff(); applyRegion(editor, region, proposed); finish(true); },
         reject: () => finish(false),
-        steer: steer ? (instr) => { this.clearDiff(); steer(instr); } : () => {},
+        steer: steer ? (instr) => { this.clearDiff(); steer(instr); } : undefined,
       };
       accept.onclick = () => this.pendingDiff?.accept();
       reject.onclick = () => this.pendingDiff?.reject();
@@ -535,6 +536,17 @@ export class FloatingWidget {
 
   private basePromptFor(kind: "fix" | "refine"): string {
     return kind === "fix" ? PROMPTS.fixFormatting : PROMPTS.refine(this.plugin.settings.styleGuide);
+  }
+
+  // Wraps a steering instruction with the just-proposed text as context. The transform that produced
+  // the preview is sessionless, so the chat agent needs the proposal handed to it to discuss or revise.
+  private steerPrompt(proposed: string, instruction: string): string {
+    return (
+      "You proposed this revised version of the open note, shown to me as a diff to review:\n\n" +
+      "```\n" + proposed + "\n```\n\n" +
+      instruction +
+      "\n\n(If I'm asking you to change the note, use propose_note_edit to revise it; otherwise just reply.)"
+    );
   }
 
   // Start a fresh chat, discarding the on-screen conversation but keeping prior threads in history.

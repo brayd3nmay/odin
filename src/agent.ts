@@ -4,7 +4,7 @@ import { execSync } from "child_process";
 import { existsSync } from "fs";
 import * as os from "os";
 import * as path from "path";
-import { extractText, stripFences } from "./parse";
+import { extractText, stripFences, preserveEdges } from "./parse";
 import { thinkingTokens, ThinkingLevel } from "./settings";
 
 export const PROMPTS = {
@@ -31,7 +31,9 @@ export const PROMPTS = {
     "is open — read that file for context and treat it as the note to edit; do NOT guess from recently " +
     "modified files. You may read other notes in the vault and search the web. You can only edit the currently " +
     "open note, and only via the propose_note_edit tool (the user reviews a diff and approves). Never attempt " +
-    "to edit other files. If you need clarification, call ask_user. Be concise.",
+    "to edit other files. propose_note_edit is ONLY for the note's actual new content — never put a question, " +
+    "clarification, or message to the user in it. If the request is ambiguous (e.g. you don't know which part " +
+    "to change), do NOT call propose_note_edit: ask via ask_user or just reply in plain text. Be concise.",
 };
 
 // Resolve the user's installed `claude`. Returns undefined to let the SDK use its bundled binary.
@@ -126,7 +128,9 @@ export class AgentClient {
       messages.push(m);
       if (hooks) this.handleStream(m, hooks);
     }
-    return stripFences(extractText(messages));
+    // Restore the original edges: Fix/Refine shouldn't alter leading/trailing whitespace, but the
+    // model drops it on rewrite, producing a phantom blank-line diff that steering can't undo.
+    return preserveEdges(text, stripFences(extractText(messages)));
   }
 
   // Read-only vault + optional web + ask_user. Used by Find Gaps.
@@ -230,9 +234,11 @@ export class AgentClient {
   private proposeEditTool(ui: AgentUI) {
     return tool(
       "propose_note_edit",
-      "Propose new full content for the currently open note. The user reviews a diff and accepts or rejects.",
+      "Propose new full content for the currently open note. The user reviews a diff and accepts or rejects. " +
+        "new_content must be ONLY the note's actual text — never a question, clarification, or message to the " +
+        "user. If you don't yet know what to edit, don't call this tool; ask via ask_user or reply in plain text.",
       {
-        new_content: z.string().describe("The complete new note content"),
+        new_content: z.string().describe("The complete new note content — note text only, never a message to the user"),
         summary: z.string().describe("One-line summary of the change"),
       },
       async (args) => {
