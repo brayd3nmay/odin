@@ -1,4 +1,4 @@
-import { Menu, setTooltip, setIcon } from "obsidian";
+import { Menu, setTooltip, setIcon, MarkdownRenderer } from "obsidian";
 import type { EditorView } from "@codemirror/view";
 import type OdinPlugin from "./main";
 import { getRegion, applyRegion, Region, LineEditor } from "./edit";
@@ -11,28 +11,45 @@ import { CLAUDE_SPARK } from "./icons";
 
 type Mode = "collapsed" | "card";
 
-// Friendly labels for the read-only tools so the thinking steps read in plain language.
-const TOOL_LABELS: Record<string, string> = {
-  Read: "Reading a note",
-  Glob: "Searching your vault",
-  Grep: "Searching your vault",
-  WebSearch: "Searching the web",
-  WebFetch: "Reading a web page",
+// Per-tool step metadata: an icon + plain-language label so the thinking steps read clearly and
+// each kind of work has its own glyph. Searches spin; everything else pulses (see CSS .is-spin).
+const STEPS: Record<string, { icon: string; label: string; spin?: boolean }> = {
+  Read: { icon: "book-open", label: "Reading a note" },
+  Glob: { icon: "search", label: "Searching your vault" },
+  Grep: { icon: "search", label: "Searching your vault" },
+  WebSearch: { icon: "globe", label: "Searching the web", spin: true },
+  WebFetch: { icon: "globe", label: "Reading a web page", spin: true },
 };
-function toolLabel(name: string): string | null {
+function stepInfo(name: string): { icon: string; label: string; spin?: boolean } | null {
   if (name.startsWith("mcp__")) return null; // internal (ask_user / propose_note_edit) — not a step
-  return TOOL_LABELS[name] ?? `Using ${name}`;
+  return STEPS[name] ?? { icon: "wrench", label: `Using ${name}` };
 }
 
-const html = (el: HTMLElement, svg: string) => { el.innerHTML = svg; };
+// Slash commands typed in the composer. fix/refine/gaps mirror runQuickAction; help lists them.
+// The menu pops above the input whenever the value is just "/" + word chars (see updateSlash).
+const COMMANDS: { cmd: string; icon: string; label: string; desc: string }[] = [
+  { cmd: "fix", icon: "list-checks", label: "Fix formatting", desc: "Tidy formatting — never changes your words" },
+  { cmd: "refine", icon: "wand-2", label: "Refine", desc: "Restructure and polish the note" },
+  { cmd: "gaps", icon: "search", label: "Find gaps", desc: "Quiz you on what's missing" },
+  { cmd: "help", icon: "help-circle", label: "Help", desc: "List these commands" },
+];
 
-// A live "thinking" region: spinner + streamed tool steps + reasoning, collapsing to "Thought for Ns".
+const html = (el: HTMLElement, svg: string) => { el.innerHTML = svg; };
+const sleep = (ms: number) => new Promise<void>((r) => window.setTimeout(r, ms));
+
+// A live "thinking" region. The head (animated icon + label) and a one-line "peek" ticker stay
+// visible while collapsed so the user always has something to watch; expanding reveals the full
+// step list and reasoning. Collapses to "Thought for Ns" when done.
 class Thinking {
   el: HTMLElement;
   private head: HTMLElement;
+  private headIc: HTMLElement;
+  private headLabel: HTMLElement;
+  private peek: HTMLElement;
   private steps: HTMLElement;
   private reason: HTMLElement;
   private lastStep: HTMLElement | null = null;
+  private reasonText = "";
   private start = Date.now();
   private done = false;
 
@@ -40,44 +57,51 @@ class Thinking {
     this.el = parent.createDiv({ cls: "odin-think is-collapsed" });
     this.head = this.el.createDiv({ cls: "odin-think-head" });
     this.head.onclick = () => this.el.toggleClass("is-collapsed", !this.el.hasClass("is-collapsed"));
+    setIcon(this.head.createSpan({ cls: "odin-chev" }), "chevron-right");
+    this.headIc = this.head.createSpan();
+    this.headLabel = this.head.createSpan({ cls: "odin-think-label" });
+    this.peek = this.el.createDiv({ cls: "odin-think-peek" });
     this.steps = this.el.createDiv({ cls: "odin-steps" });
     this.reason = this.el.createDiv({ cls: "odin-think-reason" });
-    this.renderHead();
+    this.setHead("sparkles", "Thinking…");
   }
 
-  private renderHead() {
-    this.head.empty();
-    setIcon(this.head.createSpan({ cls: "odin-chev" }), "chevron-right");
-    if (this.done) {
-      const secs = ((Date.now() - this.start) / 1000).toFixed(1);
-      this.head.createSpan({ text: `Thought for ${secs}s` });
-    } else {
-      this.head.createSpan({ cls: "odin-spinner" });
-      this.head.createSpan({ cls: "odin-think-label", text: "Thinking…" });
-    }
+  // Head icon + label mirror the current activity so a collapsed panel still tells the story.
+  private setHead(icon: string, label: string, spin = false) {
+    this.headIc.className = "odin-think-ic" + (this.done ? "" : " is-live") + (spin ? " is-spin" : "");
+    setIcon(this.headIc, icon);
+    this.headLabel.setText(label);
   }
 
   tool(name: string) {
-    const label = toolLabel(name);
-    if (!label) return;
+    const info = stepInfo(name);
+    if (!info) return;
     this.markLastDone();
+    this.setHead(info.icon, info.label, info.spin);
     const step = this.steps.createDiv({ cls: "odin-step is-live" });
-    html(step.createSpan({ cls: "odin-step-ic" }), `<span class="odin-spinner odin-spinner-sm"></span>`);
-    step.createSpan({ cls: "odin-step-tx", text: label });
+    const ic = step.createSpan({ cls: "odin-step-ic" + (info.spin ? " is-spin" : "") });
+    setIcon(ic, info.icon);
+    step.createSpan({ cls: "odin-step-tx", text: info.label });
     this.lastStep = step;
     this.scroll();
   }
 
   reasoning(delta: string) {
+    this.reasonText += delta;
     this.reason.addClass("is-shown");
-    this.reason.setText(this.reason.getText() + delta);
+    this.reason.setText(this.reasonText);
+    // peek shows the tail of the reasoning; pin it to the bottom so the newest lines stay in view.
+    this.peek.setText(this.reasonText);
+    this.peek.scrollTop = this.peek.scrollHeight;
     this.scroll();
   }
 
   private markLastDone() {
     if (this.lastStep) {
       this.lastStep.removeClass("is-live");
-      setIcon(this.lastStep.querySelector(".odin-step-ic") as HTMLElement, "check");
+      const ic = this.lastStep.querySelector(".odin-step-ic") as HTMLElement;
+      ic.className = "odin-step-ic";
+      setIcon(ic, "check");
     }
   }
 
@@ -85,7 +109,34 @@ class Thinking {
     if (this.done) return;
     this.done = true;
     this.markLastDone();
-    this.renderHead();
+    const secs = ((Date.now() - this.start) / 1000).toFixed(1);
+    this.setHead("sparkles", `Thought for ${secs}s`);
+    this.peek.empty();
+  }
+}
+
+type Reply = { append: (d: string) => void; done: () => void };
+
+// Orders a streaming run into blocks in the sequence they actually happen. Thinking/tools group into
+// one Thinking block; text into one reply bubble; a new round (text after thinking, or anything after
+// an ask) opens a fresh block below — so steps never hoist above the message they followed.
+class Transcript {
+  private think: Thinking | null = null;
+  private reply: Reply | null = null;
+  constructor(private mkThink: () => Thinking, private mkReply: () => Reply) {}
+
+  private closeThink() { if (this.think) { this.think.collapse(); this.think = null; } }
+  private closeReply() { if (this.reply) { this.reply.done(); this.reply = null; } }
+
+  thinking(delta: string) { this.closeReply(); (this.think ??= this.mkThink()).reasoning(delta); }
+  tool(name: string) { this.closeReply(); (this.think ??= this.mkThink()).tool(name); }
+  text(delta: string) { this.closeThink(); (this.reply ??= this.mkReply()).append(delta); }
+  // Close open blocks so the next thing (an ask box, an edit popup, more output) starts below them.
+  break() { this.closeThink(); this.closeReply(); }
+  finish(full: string) {
+    this.closeThink();
+    if (!this.reply && full.trim()) (this.reply = this.mkReply()).append(full);
+    this.closeReply();
   }
 }
 
@@ -98,6 +149,7 @@ export class FloatingWidget {
   private field!: HTMLElement;
   private send!: HTMLElement;
   private editPop!: HTMLElement;
+  private slashMenu!: HTMLElement;
   private modelSel!: HTMLElement;
   private thinkSel!: HTMLElement;
   private mode: Mode = "collapsed";
@@ -109,6 +161,9 @@ export class FloatingWidget {
   private busy = false;
   // Auto-scroll follows new output only while the user is already at the bottom (see scroll()).
   private stick = true;
+  // Slash-command menu state (open while slashItems is non-empty).
+  private slashItems: { cmd: string; el: HTMLElement }[] = [];
+  private slashSel = 0;
 
   // The currently-previewed edit (diff shown in the editor; controls in the panel).
   private pendingDiff: {
@@ -149,20 +204,17 @@ export class FloatingWidget {
       this.stick = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
     });
 
-    // composer zone, wrapped so the edit-approval popup can float above it (anchored, not in-stream)
+    // composer zone. The edit-approval prompt sits between the stream and the input (in flow, not
+    // floating over messages) so it never covers the conversation while a diff is being reviewed.
     const composer = this.card.createDiv({ cls: "odin-composer" });
     this.editPop = composer.createDiv({ cls: "odin-editpop" });
 
-    const actions = composer.createDiv({ cls: "odin-actions" });
-    this.quickAction(actions, "fix", "list-checks", "Fix formatting");
-    this.quickAction(actions, "refine", "wand-2", "Refine");
-    this.quickAction(actions, "gaps", "search", "Find gaps");
-
     const footer = composer.createDiv({ cls: "odin-footer" });
     this.field = footer.createDiv({ cls: "odin-field" });
+    this.slashMenu = this.field.createDiv({ cls: "odin-slash" });
     this.input = this.field.createEl("textarea", {
       cls: "odin-input",
-      attr: { placeholder: "Ask anything…", rows: "1" },
+      attr: { placeholder: "Ask anything, or / for commands…", rows: "1" },
     });
     const bar = this.field.createDiv({ cls: "odin-inbar" });
     this.modelSel = this.ghostSelect(bar, (ev) =>
@@ -179,6 +231,7 @@ export class FloatingWidget {
 
     this.input.onfocus = () => this.field.addClass("is-focus");
     this.input.onblur = () => this.field.removeClass("is-focus");
+    this.input.oninput = () => this.updateSlash();
     this.input.onkeydown = (ev: KeyboardEvent) => this.onInputKey(ev);
   }
 
@@ -190,11 +243,61 @@ export class FloatingWidget {
     return b;
   }
 
-  private quickAction(parent: HTMLElement, kind: "fix" | "refine" | "gaps", name: string, label: string) {
-    const b = parent.createEl("button", { cls: `odin-qa odin-qa-${kind}` });
-    setIcon(b.createSpan({ cls: "odin-qa-ic" }), name);
-    b.createSpan({ text: label });
-    b.onclick = () => this.runQuickAction(kind);
+  // Rebuild the slash menu from the current input. Open only while the value is "/" + word chars
+  // (so a real message that happens to contain "/" never triggers it), and never while steering an edit.
+  private updateSlash() {
+    if (this.pendingDiff) return this.hideSlash();
+    const m = /^\/(\w*)$/.exec(this.input.value);
+    const matches = m ? COMMANDS.filter((c) => c.cmd.startsWith(m[1].toLowerCase())) : [];
+    if (!matches.length) return this.hideSlash();
+    this.slashMenu.empty();
+    this.slashItems = [];
+    matches.forEach((c, i) => {
+      const row = this.slashMenu.createDiv({ cls: "odin-slash-row" });
+      setIcon(row.createSpan({ cls: "odin-slash-ic" }), c.icon);
+      row.createSpan({ cls: "odin-slash-cmd", text: "/" + c.cmd });
+      row.createSpan({ cls: "odin-slash-desc", text: c.desc });
+      row.onmouseenter = () => this.setSlashSel(i);
+      row.onclick = () => this.chooseSlash(c.cmd);
+      this.slashItems.push({ cmd: c.cmd, el: row });
+    });
+    this.setSlashSel(Math.min(this.slashSel, matches.length - 1));
+    this.slashMenu.addClass("is-shown");
+  }
+
+  private setSlashSel(i: number) {
+    this.slashSel = i < 0 ? 0 : i;
+    this.slashItems.forEach((it, idx) => it.el.toggleClass("is-sel", idx === this.slashSel));
+  }
+
+  private hideSlash() {
+    this.slashMenu.removeClass("is-shown");
+    this.slashMenu.empty();
+    this.slashItems = [];
+    this.slashSel = 0;
+  }
+
+  private chooseSlash(cmd: string) {
+    this.input.value = "";
+    this.hideSlash();
+    this.runCommand(cmd);
+  }
+
+  private runCommand(cmd: string) {
+    if (cmd === "help") return this.showHelp();
+    this.runQuickAction(cmd as "fix" | "refine" | "gaps");
+  }
+
+  private showHelp() {
+    this.open();
+    const box = this.addMsg("odin-help");
+    box.createDiv({ cls: "odin-help-title", text: "Commands" });
+    for (const c of COMMANDS) {
+      const row = box.createDiv({ cls: "odin-help-row" });
+      setIcon(row.createSpan({ cls: "odin-help-ic" }), c.icon);
+      row.createSpan({ cls: "odin-help-cmd", text: "/" + c.cmd });
+      row.createSpan({ cls: "odin-help-desc", text: c.desc });
+    }
   }
 
   private ghostSelect(parent: HTMLElement, onClick: (ev: MouseEvent) => void): HTMLElement {
@@ -251,13 +354,40 @@ export class FloatingWidget {
     el.addClass("odin-error");
   }
 
-  // A streaming assistant reply: deltas append with a blinking caret until done.
-  private newReply(): { append: (d: string) => void; done: () => void } {
+  // A streaming assistant reply: Markdown is re-rendered live as deltas arrive, with a blinking caret
+  // until done. Renders are coalesced (one at a time) and lightly throttled so a fast stream doesn't
+  // thrash the renderer; the loop keeps going until the rendered text matches the latest received.
+  private newReply(): Reply {
     const el = this.addMsg("odin-assistant is-streaming");
-    return {
-      append: (d) => { el.setText(el.getText() + d); this.scroll(); },
-      done: () => el.removeClass("is-streaming"),
+    let raw = "";
+    let shown = "";
+    let running = false;
+    const pump = async () => {
+      if (running) return;
+      running = true;
+      while (shown !== raw) {
+        const snap = raw;
+        await this.renderMd(el, snap);
+        shown = snap;
+        this.scroll();
+        await sleep(90);
+      }
+      running = false;
     };
+    return {
+      append: (d) => { raw += d; void pump(); },
+      done: () => { el.removeClass("is-streaming"); void pump(); },
+    };
+  }
+
+  // Render Markdown off-DOM, then swap it in atomically so the bubble never flashes empty mid-stream.
+  // ponytail: each render registers a MarkdownRenderChild on the plugin — fine for chat-length replies;
+  // give replies their own Component if that ever accumulates.
+  private async renderMd(el: HTMLElement, md: string): Promise<void> {
+    const tmp = document.createElement("div");
+    const src = this.plugin.activeMarkdownView()?.file?.path ?? "";
+    await MarkdownRenderer.render(this.plugin.app, md, tmp, src, this.plugin);
+    el.replaceChildren(...Array.from(tmp.childNodes));
   }
 
   private setBusy(on: boolean) {
@@ -284,9 +414,19 @@ export class FloatingWidget {
     // and propose_note_edit — so it can answer or revise. Never the toolless transform. sendChat
     // echoes the user bubble itself, so don't double-echo here.
     if (this.pendingDiff) { this.pendingDiff.steer?.(v); return; }
+    // Fallback for an exact "/cmd" typed past the menu (e.g. with a trailing space the menu dropped).
+    const m = /^\/(\w+)$/.exec(v);
+    if (m && COMMANDS.some((c) => c.cmd === m[1])) { this.hideSlash(); return this.runCommand(m[1]); }
     this.sendChat(v);
   }
   private onInputKey(ev: KeyboardEvent) {
+    if (this.slashItems.length) {
+      const n = this.slashItems.length;
+      if (ev.key === "ArrowDown") { ev.preventDefault(); this.setSlashSel((this.slashSel + 1) % n); return; }
+      if (ev.key === "ArrowUp") { ev.preventDefault(); this.setSlashSel((this.slashSel - 1 + n) % n); return; }
+      if (ev.key === "Enter" || ev.key === "Tab") { ev.preventDefault(); this.chooseSlash(this.slashItems[this.slashSel].cmd); return; }
+      if (ev.key === "Escape") { ev.preventDefault(); this.hideSlash(); return; }
+    }
     if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey) && this.pendingDiff) {
       ev.preventDefault();
       this.pendingDiff.accept();
@@ -344,26 +484,24 @@ export class FloatingWidget {
 
     const cfg = this.plugin.settings.findGaps;
     this.setBusy(true);
-    const thinking = new Thinking(this.streamEl, () => this.scroll());
-    const reply = this.lazyReply(() => thinking.collapse());
+    const tx = this.newTranscript();
     const abort = this.track(new AbortController());
     try {
       const report = await this.plugin.agent.analysis(
         PROMPTS.findGaps,
         `Here is my note. Find gaps and quiz me.\n\n---\n${text}`,
         {
-          onAskUser: (q) => this.askUser(q),
-          onTool: (n) => thinking.tool(n),
-          onThinking: (d) => thinking.reasoning(d),
-          onText: (d) => reply.append(d),
+          onAskUser: (q) => { tx.break(); return this.askUser(q); },
+          onTool: (n) => tx.tool(n),
+          onThinking: (d) => tx.thinking(d),
+          onText: (d) => tx.text(d),
         },
         { model: cfg.model, thinking: cfg.thinking, allowWeb: this.plugin.settings.allowWeb, abort },
       );
-      thinking.collapse();
-      reply.finish(report);
+      tx.finish(report);
       this.setBusy(false);
     } catch (e) {
-      thinking.collapse();
+      tx.break();
       this.setBusy(false);
       this.showError(this.addMsg("odin-status"), e);
     }
@@ -378,17 +516,16 @@ export class FloatingWidget {
     addMessage(thread, "user", display);
     this.addMsg("odin-user").setText(display);
     this.setBusy(true);
-    const thinking = new Thinking(this.streamEl, () => this.scroll());
-    const reply = this.lazyReply(() => thinking.collapse());
+    const tx = this.newTranscript();
     const cfg = this.plugin.settings.chat;
     const abort = this.track(new AbortController());
 
     const ui = {
-      onAskUser: (q: string) => this.askUser(q),
-      onProposeEdit: (content: string, summary: string) => this.proposeEdit(content, summary),
-      onTool: (n: string) => thinking.tool(n),
-      onThinking: (d: string) => thinking.reasoning(d),
-      onText: (d: string) => reply.append(d),
+      onAskUser: (q: string) => { tx.break(); return this.askUser(q); },
+      onProposeEdit: (content: string, summary: string) => { tx.break(); return this.proposeEdit(content, summary); },
+      onTool: (n: string) => tx.tool(n),
+      onThinking: (d: string) => tx.thinking(d),
+      onText: (d: string) => tx.text(d),
     };
     // Tell the agent which note is open so it edits/reads the right file instead of guessing.
     const openPath = this.plugin.activeMarkdownView()?.file?.path;
@@ -398,36 +535,20 @@ export class FloatingWidget {
         model: cfg.model, thinking: cfg.thinking, allowWeb: this.plugin.settings.allowWeb, abort,
       });
       thread.sessionId = sessionId;
-      thinking.collapse();
-      reply.finish(full);
+      tx.finish(full);
       addMessage(thread, "assistant", full);
       this.setBusy(false);
       await this.plugin.saveSettings();
     } catch (e) {
-      thinking.collapse();
-      reply.discard();
+      tx.break();
       this.setBusy(false);
       this.showError(this.addMsg("odin-status"), e);
       await this.plugin.saveSettings();
     }
   }
 
-  // A reply bubble created on first text delta. `onFirst` runs once (to collapse thinking).
-  private lazyReply(onFirst: () => void) {
-    let r: { append: (d: string) => void; done: () => void } | null = null;
-    let started = false;
-    return {
-      append: (d: string) => {
-        if (!started) { started = true; onFirst(); r = this.newReply(); }
-        r!.append(d);
-      },
-      // Ensure the final text is shown (covers replies that arrive without partial deltas).
-      finish: (full: string) => {
-        if (!started && full.trim()) { onFirst(); r = this.newReply(); r.append(full); }
-        r?.done();
-      },
-      discard: () => r?.done(),
-    };
+  private newTranscript(): Transcript {
+    return new Transcript(() => new Thinking(this.streamEl, () => this.scroll()), () => this.newReply());
   }
 
   private presentEdit(view: any, editor: LineEditor, region: Region, proposed: string, steer?: (instruction: string) => void): Promise<boolean> {
@@ -442,8 +563,8 @@ export class FloatingWidget {
       this.clearDiff();
       showDiff(cm, region.fromLine, region.text, proposed);
 
-      // Approval prompt floats above the composer (see .odin-editpop) so it stays put while the
-      // diff is reviewed, instead of scrolling away in the stream.
+      // Approval prompt sits in flow just above the composer (see .odin-editpop) so it stays put
+      // while the diff is reviewed, without covering the conversation above it.
       const pop = this.editPop;
       pop.empty();
       const head = pop.createDiv({ cls: "odin-editpop-head" });
@@ -510,14 +631,17 @@ export class FloatingWidget {
       const box = this.addMsg("odin-ask");
       box.createDiv({ cls: "odin-ask-q", text: question });
       const input = box.createEl("input", { cls: "odin-ask-input", attr: { placeholder: "Type your answer…" } });
-      box.createDiv({ cls: "odin-ask-hint", text: "Enter to send" });
+      const hint = box.createDiv({ cls: "odin-ask-hint", text: "Enter to send" });
       input.focus();
       this.pendingAsk = resolve;
       input.onkeydown = (ev: KeyboardEvent) => {
         if (ev.key === "Enter" && input.value.trim()) {
           const answer = input.value.trim();
-          box.empty();
-          box.setText(`You: ${answer}`);
+          // Keep the question on screen; swap the input out for the answer so the exchange reads as Q → A.
+          input.remove();
+          hint.remove();
+          box.addClass("is-answered");
+          box.createDiv({ cls: "odin-ask-a", text: answer });
           this.pendingAsk = null;
           resolve(answer);
         }
@@ -583,7 +707,8 @@ export class FloatingWidget {
     this.thread = t;
     this.resetStream();
     for (const m of t.messages) {
-      this.addMsg(m.role === "user" ? "odin-user" : "odin-assistant").setText(m.text);
+      if (m.role === "user") this.addMsg("odin-user").setText(m.text);
+      else this.renderMd(this.addMsg("odin-assistant"), m.text);
     }
   }
 }

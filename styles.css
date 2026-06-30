@@ -18,7 +18,6 @@
 
 /* card */
 .odin-card {
-  --c-fix: #2d7ff9; --c-refine: var(--interactive-accent); --c-gaps: #e8930c;
   display: none; flex-direction: column;
   width: 384px; height: 540px; max-height: 80vh;
   background: var(--background-primary);
@@ -42,20 +41,25 @@
 .odin-stream { flex: 1; overflow-y: auto; padding: 12px 14px 8px; display: flex; flex-direction: column; gap: 12px; }
 .odin-msg { line-height: 1.55; }
 
-/* thinking */
-.odin-spinner {
-  width: 14px; height: 14px; flex: 0 0 auto; box-sizing: border-box;
-  border: 2px solid var(--background-modifier-border); border-top-color: var(--interactive-accent);
-  border-radius: 50%; animation: odin-spin 0.7s linear infinite; display: inline-block;
-}
-.odin-spinner-sm { width: 11px; height: 11px; }
+/* thinking — animated icon + label, with a collapsed-only one-line "peek" of the live reasoning */
 @keyframes odin-spin { to { transform: rotate(360deg); } }
+@keyframes odin-pulse { 0%, 100% { opacity: 0.45; } 50% { opacity: 1; } }
 .odin-think-head { display: flex; align-items: center; gap: 7px; color: var(--text-muted); font-size: 13px; cursor: pointer; user-select: none; }
 .odin-think-head:hover { color: var(--text-normal); }
 .odin-think-label { font-weight: 500; }
+.odin-think-ic { --icon-size: 15px; display: inline-flex; color: var(--text-muted); }
+.odin-think-ic.is-live { color: var(--interactive-accent); animation: odin-pulse 1.4s ease-in-out infinite; }
+.odin-think-ic.is-spin { animation: odin-spin 1.1s linear infinite; }
 /* chevron-right by default (collapsed ▸); rotates to point down (▾) when expanded */
 .odin-chev { --icon-size: 16px; color: var(--text-faint); display: inline-flex; transition: transform 0.12s ease; }
 .odin-think:not(.is-collapsed) .odin-chev { transform: rotate(90deg); }
+/* peek: the tail of the live reasoning, clipped to ~2 lines and scroll-pinned to the newest text */
+.odin-think-peek {
+  margin: 4px 0 0 23px; max-height: 2.7em; overflow: hidden;
+  color: var(--text-faint); font-size: 12px; line-height: 1.35; white-space: pre-wrap; word-break: break-word;
+}
+.odin-think-peek:empty { display: none; }
+.odin-think:not(.is-collapsed) .odin-think-peek,
 .odin-think.is-collapsed .odin-steps,
 .odin-think.is-collapsed .odin-think-reason { display: none; }
 .odin-steps { display: flex; flex-direction: column; gap: 7px; margin: 7px 0 0; padding: 2px 0 2px 10px; border-left: 2px solid var(--background-modifier-border); }
@@ -63,6 +67,8 @@
 .odin-step { display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 12.5px; }
 .odin-step.is-live { color: var(--text-normal); }
 .odin-step-ic { --icon-size: var(--icon-xs, 14px); width: 14px; display: inline-flex; align-items: center; justify-content: center; }
+.odin-step.is-live .odin-step-ic { color: var(--interactive-accent); animation: odin-pulse 1.4s ease-in-out infinite; }
+.odin-step.is-live .odin-step-ic.is-spin { animation: odin-spin 1.1s linear infinite; }
 .odin-step:not(.is-live) .odin-step-ic { color: var(--text-success); }
 .odin-think-reason { display: none; white-space: pre-wrap; color: var(--text-muted); font-size: 12.5px; margin-top: 8px; padding-left: 10px; border-left: 2px solid var(--background-modifier-border); }
 .odin-think-reason.is-shown { display: block; }
@@ -73,7 +79,14 @@
   background: color-mix(in srgb, var(--interactive-accent) 12%, var(--background-primary));
   color: var(--text-normal); padding: 6px 11px; border-radius: var(--radius-m, 8px);
 }
-.odin-assistant { max-width: 100%; white-space: pre-wrap; color: var(--text-normal); }
+.odin-assistant { max-width: 100%; color: var(--text-normal); }
+.odin-assistant.is-streaming { white-space: pre-wrap; }
+/* rendered Markdown: trim the outer block margins so the bubble doesn't gain dead space, keep inner rhythm */
+.odin-assistant > :first-child { margin-top: 0; }
+.odin-assistant > :last-child { margin-bottom: 0; }
+.odin-assistant p { margin: 0 0 0.5em; }
+.odin-assistant ul, .odin-assistant ol { margin: 0.3em 0; padding-left: 1.4em; }
+.odin-assistant pre { white-space: pre; overflow-x: auto; }
 .odin-assistant.is-streaming::after {
   content: ""; display: inline-block; width: 2px; height: 1.05em; margin-left: 2px;
   background: var(--text-normal); vertical-align: text-bottom; animation: odin-blink 1s step-end infinite;
@@ -93,17 +106,17 @@
 .odin-kbd { font-family: var(--font-monospace); font-size: 10px; padding: 1px 5px; border-radius: var(--radius-s, 4px); background: var(--background-modifier-border); }
 .odin-pb.is-accept .odin-kbd { background: rgba(255, 255, 255, 0.22); }
 
-/* edit-approval popup — floats just above the composer (anchored, not in the scrolling stream),
+/* edit-approval prompt — sits in flow between the stream and the input (not floating over messages),
    like a permission prompt that stays put while you review the highlighted diff */
 .odin-composer { position: relative; }
 .odin-editpop {
   display: none;
-  position: absolute; left: 8px; right: 8px; bottom: calc(100% + 4px);
+  margin: 0 10px 6px;
   padding: 11px 12px 12px;
-  background: var(--background-primary);
+  background: var(--background-secondary);
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--radius-m, 8px);
-  box-shadow: var(--shadow-l);
+  box-shadow: var(--shadow-s);
   animation: odin-pop 0.16s ease;
 }
 .odin-editpop.is-shown { display: block; }
@@ -113,19 +126,33 @@
 .odin-editpop-title { font-weight: 600; font-size: 13.5px; }
 .odin-editpop-sub { color: var(--text-muted); font-size: 12.5px; margin: 5px 0 10px; }
 
-/* quick actions: lightweight shortcut chips, separated from the conversation by a hairline */
-.odin-actions { display: flex; gap: 2px; padding: 8px 10px 4px; border-top: 1px solid var(--background-modifier-border); }
-.odin-qa { --c: var(--text-muted); display: flex; align-items: center; gap: 6px; padding: 5px 8px; border: none; border-radius: var(--radius-s, 4px); background: transparent; color: var(--text-muted); font-size: 12.5px; font-weight: 500; cursor: pointer; white-space: nowrap; box-shadow: none; }
-.odin-qa-ic { --icon-size: var(--icon-s, 16px); color: var(--text-faint); display: inline-flex; }
-.odin-qa:hover { background: color-mix(in srgb, var(--c) 13%, var(--background-primary)); color: var(--c); }
-.odin-qa:hover .odin-qa-ic { color: var(--c); }
-.odin-qa-fix { --c: var(--c-fix); }
-.odin-qa-refine { --c: var(--c-refine); }
-.odin-qa-gaps { --c: var(--c-gaps); }
+/* slash-command menu — pops above the composer field while the input is "/cmd" (see updateSlash) */
+.odin-slash {
+  display: none;
+  position: absolute; left: 0; right: 0; bottom: calc(100% + 6px);
+  padding: 4px; background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m, 8px); box-shadow: var(--shadow-l);
+  animation: odin-pop 0.12s ease;
+}
+.odin-slash.is-shown { display: block; }
+.odin-slash-row { display: flex; align-items: center; gap: 9px; padding: 6px 8px; border-radius: var(--radius-s, 4px); cursor: pointer; }
+.odin-slash-row.is-sel { background: var(--background-modifier-hover); }
+.odin-slash-ic { --icon-size: var(--icon-s, 16px); color: var(--text-muted); display: inline-flex; }
+.odin-slash-cmd { font-family: var(--font-monospace); font-size: 12.5px; color: var(--text-normal); }
+.odin-slash-desc { color: var(--text-muted); font-size: 12px; margin-left: auto; }
+
+/* /help — a compact command reference printed into the stream */
+.odin-help { background: var(--background-secondary); border: 1px solid var(--background-modifier-border); border-radius: var(--radius-m, 8px); padding: 10px 12px; }
+.odin-help-title { font-weight: 600; font-size: 13px; margin-bottom: 8px; }
+.odin-help-row { display: flex; align-items: center; gap: 9px; padding: 3px 0; }
+.odin-help-ic { --icon-size: var(--icon-s, 16px); color: var(--text-muted); display: inline-flex; }
+.odin-help-cmd { font-family: var(--font-monospace); font-size: 12.5px; color: var(--text-normal); min-width: 60px; }
+.odin-help-desc { color: var(--text-muted); font-size: 12.5px; }
 
 /* composer: a single input box holds the textarea + an inner toolbar (model · thinking · send) */
 .odin-footer { padding: 4px 10px 10px; }
-.odin-field { display: flex; flex-direction: column; gap: 4px; background: var(--background-modifier-form-field); border: 1px solid var(--background-modifier-border); border-radius: var(--radius-m, 8px); padding: 6px 8px 6px 10px; transition: border-color 0.15s, background 0.15s; }
+.odin-field { position: relative; display: flex; flex-direction: column; gap: 4px; background: var(--background-modifier-form-field); border: 1px solid var(--background-modifier-border); border-radius: var(--radius-m, 8px); padding: 6px 8px 6px 10px; transition: border-color 0.15s, background 0.15s; }
 .odin-field.is-focus { border-color: var(--background-modifier-border-focus); }
 .odin-field.is-steer { border-color: var(--interactive-accent); background: color-mix(in srgb, var(--interactive-accent) 8%, var(--background-primary)); }
 .odin-input { width: 100%; resize: none; border: none; background: transparent; outline: none; box-shadow: none; font: inherit; font-size: 13.5px; color: var(--text-normal); padding: 4px 2px 2px; line-height: 1.35; min-height: 0; }
@@ -141,9 +168,12 @@
 .odin-send.is-stop { color: var(--text-muted); }
 .odin-send.is-stop:hover { color: var(--text-on-accent, #fff); background: var(--background-modifier-error-hover, var(--background-modifier-error)); }
 
-/* ask_user — an inline question callout with a styled answer field */
+/* ask_user — an inline question callout; once answered it keeps the question and shows the answer */
 .odin-ask { background: var(--background-secondary); border: 1px solid var(--interactive-accent); border-radius: var(--radius-m, 8px); padding: 10px 11px; }
+.odin-ask.is-answered { border-color: var(--background-modifier-border); }
 .odin-ask-q { font-weight: 600; line-height: 1.45; margin-bottom: 8px; }
+.odin-ask-a { color: var(--text-normal); line-height: 1.45; padding-top: 8px; border-top: 1px solid var(--background-modifier-border); }
+.odin-ask.is-answered .odin-ask-q { margin-bottom: 0; color: var(--text-muted); font-weight: 500; }
 .odin-ask-input { width: 100%; font: inherit; font-size: 13.5px; color: var(--text-normal); background: var(--background-modifier-form-field); border: 1px solid var(--background-modifier-border); border-radius: var(--radius-s, 4px); padding: 6px 9px; outline: none; box-shadow: none; transition: border-color 0.15s; }
 .odin-ask-input:focus { border-color: var(--background-modifier-border-focus); box-shadow: none; }
 .odin-ask-input::placeholder { color: var(--text-faint); }

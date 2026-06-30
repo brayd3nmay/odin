@@ -33,7 +33,10 @@ export const PROMPTS = {
     "open note, and only via the propose_note_edit tool (the user reviews a diff and approves). Never attempt " +
     "to edit other files. propose_note_edit is ONLY for the note's actual new content — never put a question, " +
     "clarification, or message to the user in it. If the request is ambiguous (e.g. you don't know which part " +
-    "to change), do NOT call propose_note_edit: ask via ask_user or just reply in plain text. Be concise.",
+    "to change), do NOT call propose_note_edit: ask via ask_user or just reply in plain text. Be concise. " +
+    "Your replies are shown to the user as rendered Markdown, so write Markdown directly — use headings, " +
+    "lists, bold/italics, and inline code where they help. Do NOT wrap your whole reply in a code fence; " +
+    "reserve fenced code blocks for actual code, or for when the user explicitly asks to see raw Markdown source.",
 };
 
 // Resolve the user's installed `claude`. Returns undefined to let the SDK use its bundled binary.
