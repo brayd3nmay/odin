@@ -1,13 +1,23 @@
 import { query, tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import { Codex, ThreadEvent, ThreadOptions } from "@openai/codex-sdk";
 import { z } from "zod";
-import { execSync } from "child_process";
+import { execSync, execFileSync } from "child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "fs";
 import * as os from "os";
 import * as path from "path";
 import { extractText, stripFences, preserveEdges } from "./parse";
-import { skillSlug, skillDoc, parseSkill, SkillInfo } from "./skill";
+import { safeSkillDir, skillDoc, parseSkill, SkillInfo } from "./skill";
 import { AgentProvider, thinkingTokens, ThinkingLevel } from "./settings";
+
+// Full SDK isolation from the user's own Claude Code config. settingSources:[] loads NO filesystem
+// settings, so neither ~/.claude (global) NOR the vault's .claude (project) — personal CLAUDE.md,
+// hooks, permissions, skills — can bleed into the Obsidian assistant. skills:[] enables zero
+// auto-discovered skills; it's redundant under settingSources:[] (skills load only from a settings
+// source) but explicit. Odin's own skills are injected directly via the "/" menu (see widget.invokeSkill).
+const ISOLATED_SETTINGS: { settingSources: ("user" | "project" | "local")[]; skills: string[] } = {
+  settingSources: [],
+  skills: [],
+};
 
 export const PROMPTS = {
   fixFormatting:
@@ -50,7 +60,9 @@ export const PROMPTS = {
     "new one, edit_skill overwrites an existing one (Read its SKILL.md first and pass the complete new " +
     "contents), and delete_skill removes one. The user approves each with a confirmation, so only call them on " +
     "a direct request like \"remember that…\", \"save this as a skill\", \"update my … skill\", or \"forget that " +
-    "preference\". A created or edited skill is runnable by the user typing /<name> in the composer.",
+    "preference\". A created or edited skill is runnable by the user typing /<name> in the composer. Your " +
+    "saved skills are NOT auto-loaded into this conversation — if the user asks whether you can see a skill, " +
+    "tell them their saved skills run by typing /<name> in the composer; you don't have them listed unless one is invoked.",
 };
 
 type ExecProbe = (cmd: string) => string;
@@ -208,18 +220,57 @@ function builtinTools(allowWeb: boolean): string[] {
   return allowWeb ? ["Read", "Glob", "Grep", "WebSearch", "WebFetch"] : ["Read", "Glob", "Grep"];
 }
 
-function parseCodexEdit(text: string): { reply: string; summary: string; content: string } | null {
-  const match = text.match(/<odin_propose_note_edit(?:\s+summary="([^"]*)")?\s*>\n?([\s\S]*?)\n?<\/odin_propose_note_edit>/);
-  if (!match) return null;
+// Pull a proposed full-note edit out of a Codex reply. Tolerant by design: case-insensitive, allows
+// any/extra attributes on the open tag, and treats a MISSING closing tag as "to end of message" — the
+// old strict regex silently dropped the edit (leaving raw XML in the reply) whenever the model's tag
+// shape drifted. Exported for tests.
+export function parseCodexEdit(text: string): { reply: string; summary: string; content: string } | null {
+  const m = text.match(/<odin_propose_note_edit\b([^>]*)>\r?\n?([\s\S]*?)(?:\r?\n?<\/odin_propose_note_edit>|$)/i);
+  if (!m) return null;
+  const summary = (m[1].match(/summary\s*=\s*"([^"]*)"/i)?.[1] ?? "").trim() || "Proposed note edit";
   return {
-    reply: text.replace(match[0], "").trim(),
-    summary: (match[1] ?? "Proposed note edit").trim() || "Proposed note edit",
-    content: stripFences(match[2].trim()),
+    reply: text.replace(m[0], "").trim(),
+    summary,
+    content: stripFences(m[2].trim()),
   };
 }
 
+export interface ProviderStatus {
+  provider: AgentProvider;
+  path?: string;
+  version?: string;
+  authed: boolean;
+  detail: string;
+  hint?: string;
+}
+
+// Parse `claude auth status --json` stdout into authed + a human-readable detail. Exported for tests.
+export function parseClaudeAuth(stdout: string): { authed: boolean; detail: string } {
+  try {
+    const j = JSON.parse(stdout);
+    if (j?.loggedIn === true) {
+      const who = j.email || j.authMethod || "logged in";
+      const plan = j.subscriptionType ? ` · ${j.subscriptionType}` : "";
+      return { authed: true, detail: `${who}${plan}` };
+    }
+  } catch {
+    /* not JSON → fall through to not-authed */
+  }
+  return { authed: false, detail: "Not logged in" };
+}
+
+// Parse `codex login status` stdout. The exit code is unreliable (a bad subcommand still exits 0), so
+// read the first line. Exported for tests.
+export function parseCodexAuth(stdout: string): { authed: boolean; detail: string } {
+  const line = stdout.trim().split("\n")[0]?.trim() ?? "";
+  if (/^logged in/i.test(line)) return { authed: true, detail: line };
+  return { authed: false, detail: line || "Not logged in" };
+}
+
 export class AgentClient {
-  constructor(private cfg: { cwd: string; claudePath?: string; codexPath?: string }) {}
+  // skillsDir is Odin's OWN skill store (the plugin's dir, not the vault's .claude/skills) so the
+  // user's personal Claude Code skills never collide with or bleed into Odin's — see main.refreshAgent.
+  constructor(private cfg: { cwd: string; skillsDir: string; claudePath?: string; codexPath?: string }) {}
 
   // Which providers have a resolved CLI. ponytail: best-effort detection from resolved
   // CLI paths; show both if neither is detectable so we never lock the user out.
@@ -230,10 +281,39 @@ export class AgentClient {
     return out.length ? out : ["claude", "codex"];
   }
 
-  // The skills authored in this vault (<cwd>/.claude/skills/<slug>/SKILL.md), surfaced in the widget's
-  // "/" menu so the user can run them directly. Sync + cheap (a handful of small files).
+  // A zero-token connection check for the settings doctor: resolve the CLI, read its version, then ask
+  // the CLI's OWN auth-status command (no model turn). A missing CLI / exec failure → not authed.
+  async checkProvider(provider: AgentProvider): Promise<ProviderStatus> {
+    const cliPath = provider === "claude" ? this.cfg.claudePath : this.cfg.codexPath;
+    const label = provider === "claude" ? "Claude" : "Codex";
+    const loginHint = provider === "claude" ? "Run `claude login` in your terminal." : "Run `codex login` in your terminal.";
+    if (!cliPath) {
+      return { provider, authed: false, detail: `No ${label} CLI found`, hint: `Install the ${label} CLI, then reopen settings — or set its path below.` };
+    }
+    // execFileSync (no shell) — cliPath is passed as argv[0], so a path with spaces or shell
+    // metacharacters can't break out into a command string.
+    const run = (args: string[]) => execFileSync(cliPath, args, { encoding: "utf8", timeout: 8000 });
+    let version: string | undefined;
+    try {
+      version = run(["--version"]).trim().split("\n")[0];
+    } catch {
+      /* version is best-effort */
+    }
+    try {
+      const r =
+        provider === "claude"
+          ? parseClaudeAuth(run(["auth", "status", "--json"]))
+          : parseCodexAuth(run(["login", "status"]));
+      return { provider, path: cliPath, version, authed: r.authed, detail: r.detail, hint: r.authed ? undefined : loginHint };
+    } catch {
+      return { provider, path: cliPath, version, authed: false, detail: "Could not check login status", hint: loginHint };
+    }
+  }
+
+  // The skills Odin has authored (<skillsDir>/<slug>/SKILL.md), surfaced in the widget's "/" menu so
+  // the user can run them directly. Sync + cheap (a handful of small files).
   listSkills(): SkillInfo[] {
-    const dir = path.join(this.cfg.cwd, ".claude", "skills");
+    const dir = this.cfg.skillsDir;
     if (!existsSync(dir)) return [];
     const out: SkillInfo[] = [];
     for (const slug of readdirSync(dir)) {
@@ -247,6 +327,14 @@ export class AgentClient {
       }
     }
     return out.sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  // Delete an Odin skill by slug (used by the settings list). Same containment guard as the chat tool.
+  removeSkill(slug: string): boolean {
+    const loc = safeSkillDir(this.cfg.skillsDir, slug);
+    if (!loc || !existsSync(loc.file)) return false;
+    rmSync(loc.dir, { recursive: true, force: true });
+    return true;
   }
 
   // One-shot transform used by Fix Formatting & Refine; the result is shown as a diff, not typed.
@@ -264,6 +352,7 @@ export class AgentClient {
         systemPrompt,
         model: o.model,
         tools: [],
+        ...ISOLATED_SETTINGS,
         pathToClaudeCodeExecutable: this.cfg.claudePath,
         abortController: o.abort,
         ...(hooks ? { includePartialMessages: true } : {}),
@@ -283,13 +372,7 @@ export class AgentClient {
       "Use only the text below. Do not inspect files, run commands, or modify files. " +
       "Return only the transformed text with no commentary or code fences.\n\n---\n" +
       text;
-    const result = await this.runCodex(prompt, {
-      provider: "codex",
-      model: o.model,
-      thinking: o.thinking,
-      allowWeb: false,
-      abort: o.abort,
-    }, hooks);
+    const result = await this.runCodex(prompt, { ...o, allowWeb: false }, hooks);
     return preserveEdges(text, stripFences(result.text));
   }
 
@@ -316,6 +399,7 @@ export class AgentClient {
         tools: builtins,
         mcpServers: { odin },
         allowedTools: [...builtins, "mcp__odin__ask_user"],
+        ...ISOLATED_SETTINGS,
         pathToClaudeCodeExecutable: this.cfg.claudePath,
         abortController: o.abort,
         includePartialMessages: true,
@@ -354,23 +438,22 @@ export class AgentClient {
     ui: AgentUI,
     o: RunOpts,
   ): Promise<{ text: string; sessionId: string }> {
-    // ponytail: any[] avoids the generic mismatch between SdkMcpToolDefinition<{question}> and SdkMcpToolDefinition<{new_content,summary}>
-    const tools: any[] = [this.askUserTool(ui)];
-    if (ui.onProposeEdit) tools.push(this.proposeEditTool(ui));
-    if (ui.onUpdateStyleGuide) tools.push(this.updateStyleGuideTool(ui));
-    if (ui.onReplaceStyleGuide) tools.push(this.replaceStyleGuideTool(ui));
-    if (ui.onCreateSkill) tools.push(this.createSkillTool(ui));
-    if (ui.onEditSkill) tools.push(this.editSkillTool(ui));
-    if (ui.onDeleteSkill) tools.push(this.deleteSkillTool(ui));
-    const odin = createSdkMcpServer({ name: "odin", version: "1.0.0", tools });
+    // askUser is always on; the rest are gated by which UI callbacks the caller supplied. One table so
+    // a tool can never be stream-enabled-but-not-allowed (a row carries both the tool and its allow entry).
+    // ponytail: any[] avoids the generic mismatch between the differently-shaped SdkMcpToolDefinitions.
     const builtins = builtinTools(o.allowWeb);
+    const tools: any[] = [this.askUserTool(ui)];
     const allowed = [...builtins, "mcp__odin__ask_user"];
-    if (ui.onProposeEdit) allowed.push("mcp__odin__propose_note_edit");
-    if (ui.onUpdateStyleGuide) allowed.push("mcp__odin__update_style_guide");
-    if (ui.onReplaceStyleGuide) allowed.push("mcp__odin__replace_style_guide");
-    if (ui.onCreateSkill) allowed.push("mcp__odin__create_skill");
-    if (ui.onEditSkill) allowed.push("mcp__odin__edit_skill");
-    if (ui.onDeleteSkill) allowed.push("mcp__odin__delete_skill");
+    const optional: [unknown, () => any, string][] = [
+      [ui.onProposeEdit, () => this.proposeEditTool(ui), "propose_note_edit"],
+      [ui.onUpdateStyleGuide, () => this.updateStyleGuideTool(ui), "update_style_guide"],
+      [ui.onReplaceStyleGuide, () => this.replaceStyleGuideTool(ui), "replace_style_guide"],
+      [ui.onCreateSkill, () => this.createSkillTool(ui), "create_skill"],
+      [ui.onEditSkill, () => this.editSkillTool(ui), "edit_skill"],
+      [ui.onDeleteSkill, () => this.deleteSkillTool(ui), "delete_skill"],
+    ];
+    for (const [on, make, name] of optional) if (on) { tools.push(make()); allowed.push("mcp__odin__" + name); }
+    const odin = createSdkMcpServer({ name: "odin", version: "1.0.0", tools });
 
     const guide = o.styleGuide?.trim();
     const systemPrompt = guide
@@ -388,12 +471,11 @@ export class AgentClient {
         mcpServers: { odin },
         allowedTools: allowed,
         resume: resumeSessionId,
-        // Scope settings to the project so the user's GLOBAL Claude Code config/hooks don't bleed into
-        // the Obsidian assistant. skills:[] disables the SDK's own skill auto-loading (which only found
-        // global skills, not the vault's) — the user's authored skills are invoked directly via the
-        // "/" menu (see widget.listSkills / invokeSkill) for immediate, reliable use.
-        settingSources: ["project"],
-        skills: [],
+        // Fully isolate the chat from the user's own Claude Code config — see ISOLATED_SETTINGS. This
+        // is the path the persistent chat runs on, so the vault's .claude (personal CLAUDE.md, hooks
+        // like a SessionStart skill, permissions) must NOT bleed in; Odin's own skills are invoked
+        // directly via the "/" menu (see widget.invokeSkill).
+        ...ISOLATED_SETTINGS,
         pathToClaudeCodeExecutable: this.cfg.claudePath,
         abortController: o.abort,
         includePartialMessages: true,
@@ -414,7 +496,7 @@ export class AgentClient {
     o: RunOpts,
   ): Promise<{ text: string; sessionId: string }> {
     const prompt =
-      PROMPTS.chat.replace("If you need clarification, call ask_user.", "If you need clarification, ask it directly in your response.")
+      PROMPTS.chat.replace("ask via ask_user or just reply in plain text", "ask the question directly in your reply")
         .replace("You can only edit the currently open note, and only via the propose_note_edit tool (the user reviews a diff and approves). Never attempt to edit other files. ", "") +
       "\n\nYou are running through Codex in read-only mode. Never edit files directly. " +
       "If the user wants the current note changed, include the complete replacement note inside this exact XML block at the end of your response:\n" +
@@ -549,14 +631,15 @@ export class AgentClient {
     );
   }
 
-  // Author a Claude Code skill at <vault>/.claude/skills/<slug>/SKILL.md. Safety lives in code, not a
-  // dialog: slug sanitization, path containment under the skills dir, and no-overwrite. The file is
-  // only written after the user approves the inline confirmation (ui.onCreateSkill).
+  // Author a skill SKILL.md in Odin's own skills dir (cfg.skillsDir). Safety lives in code, not a
+  // dialog: slug sanitization, path containment under the skills dir (safeSkillDir), and no-overwrite.
+  // The file is only written after the user approves the inline confirmation (ui.onCreateSkill).
   private createSkillTool(ui: AgentUI) {
     return tool(
       "create_skill",
-      "Author a reusable skill at .claude/skills/<name>/SKILL.md so it is available in the user's NEXT chat. " +
-        "Use ONLY when the user explicitly asks you to save or remember a workflow. Does not overwrite an existing skill.",
+      "Author a reusable skill (saved as a SKILL.md in Odin's skills folder) so it is runnable in the " +
+        "user's NEXT chat via /<name>. Use ONLY when the user explicitly asks you to save or remember a " +
+        "workflow. Does not overwrite an existing skill.",
       {
         name: z.string().describe("Short skill name; becomes the directory slug"),
         description: z.string().describe("One-line description of when to use the skill"),
@@ -564,18 +647,14 @@ export class AgentClient {
       },
       async (args) => {
         const text = (t: string) => ({ content: [{ type: "text" as const, text: t }] });
-        const slug = skillSlug(args.name);
-        if (!slug) return text("Invalid skill name.");
-        const root = path.resolve(this.cfg.cwd, ".claude", "skills");
-        const dir = path.join(root, slug);
-        if (!path.resolve(dir).startsWith(root + path.sep)) return text("Refused: unsafe skill path.");
-        const file = path.join(dir, "SKILL.md");
-        if (existsSync(file)) return text(`A skill named "${slug}" already exists; not overwriting.`);
-        const ok = await ui.onCreateSkill!(slug, args.description.trim());
+        const loc = safeSkillDir(this.cfg.skillsDir, args.name);
+        if (!loc) return text("Invalid skill name.");
+        if (existsSync(loc.file)) return text(`A skill named "${loc.slug}" already exists; not overwriting.`);
+        const ok = await ui.onCreateSkill!(loc.slug, args.description.trim());
         if (!ok) return text("User declined; no skill was created.");
-        mkdirSync(dir, { recursive: true });
-        writeFileSync(file, skillDoc(slug, args.description, args.instructions), "utf8");
-        return text(`Created skill "${slug}". The user can run it anytime by typing /${slug} in the composer.`);
+        mkdirSync(loc.dir, { recursive: true });
+        writeFileSync(loc.file, skillDoc(loc.slug, args.description, args.instructions), "utf8");
+        return text(`Created skill "${loc.slug}". The user can run it anytime by typing /${loc.slug} in the composer.`);
       },
       { annotations: { readOnlyHint: false } },
     );
@@ -586,7 +665,7 @@ export class AgentClient {
   private editSkillTool(ui: AgentUI) {
     return tool(
       "edit_skill",
-      "Overwrite an EXISTING skill at .claude/skills/<name>/SKILL.md with new contents. First Read the " +
+      "Overwrite an EXISTING skill's SKILL.md with new contents. First Read the " +
         "current SKILL.md, then pass the COMPLETE new description and instructions (this replaces the whole " +
         "file). Use ONLY when the user explicitly asks to change an existing skill. Fails if no such skill " +
         "exists — use create_skill for new ones.",
@@ -597,17 +676,13 @@ export class AgentClient {
       },
       async (args) => {
         const text = (t: string) => ({ content: [{ type: "text" as const, text: t }] });
-        const slug = skillSlug(args.name);
-        if (!slug) return text("Invalid skill name.");
-        const root = path.resolve(this.cfg.cwd, ".claude", "skills");
-        const dir = path.join(root, slug);
-        if (!path.resolve(dir).startsWith(root + path.sep)) return text("Refused: unsafe skill path.");
-        const file = path.join(dir, "SKILL.md");
-        if (!existsSync(file)) return text(this.noSuchSkill(slug));
-        const ok = await ui.onEditSkill!(slug, args.description.trim());
+        const loc = safeSkillDir(this.cfg.skillsDir, args.name);
+        if (!loc) return text("Invalid skill name.");
+        if (!existsSync(loc.file)) return text(this.noSuchSkill(loc.slug));
+        const ok = await ui.onEditSkill!(loc.slug, args.description.trim());
         if (!ok) return text("User declined; the skill was not changed.");
-        writeFileSync(file, skillDoc(slug, args.description, args.instructions), "utf8");
-        return text(`Updated skill "${slug}".`);
+        writeFileSync(loc.file, skillDoc(loc.slug, args.description, args.instructions), "utf8");
+        return text(`Updated skill "${loc.slug}".`);
       },
       { annotations: { readOnlyHint: false } },
     );
@@ -617,23 +692,19 @@ export class AgentClient {
   private deleteSkillTool(ui: AgentUI) {
     return tool(
       "delete_skill",
-      "Delete an EXISTING skill (removes .claude/skills/<name>/ and its SKILL.md). Use ONLY when the user " +
+      "Delete an EXISTING skill (removes its folder and SKILL.md). Use ONLY when the user " +
         "explicitly asks to delete or remove a skill. The user approves before it is removed.",
       { name: z.string().describe("Name of the existing skill (its directory slug)") },
       async (args) => {
         const text = (t: string) => ({ content: [{ type: "text" as const, text: t }] });
-        const slug = skillSlug(args.name);
-        if (!slug) return text("Invalid skill name.");
-        const root = path.resolve(this.cfg.cwd, ".claude", "skills");
-        const dir = path.join(root, slug);
-        if (!path.resolve(dir).startsWith(root + path.sep)) return text("Refused: unsafe skill path.");
-        const file = path.join(dir, "SKILL.md");
-        if (!existsSync(file)) return text(this.noSuchSkill(slug));
-        const desc = parseSkill(readFileSync(file, "utf8")).description;
-        const ok = await ui.onDeleteSkill!(slug, desc);
+        const loc = safeSkillDir(this.cfg.skillsDir, args.name);
+        if (!loc) return text("Invalid skill name.");
+        if (!existsSync(loc.file)) return text(this.noSuchSkill(loc.slug));
+        const desc = parseSkill(readFileSync(loc.file, "utf8")).description;
+        const ok = await ui.onDeleteSkill!(loc.slug, desc);
         if (!ok) return text("User declined; the skill was not deleted.");
-        rmSync(dir, { recursive: true, force: true });
-        return text(`Deleted skill "${slug}".`);
+        rmSync(loc.dir, { recursive: true, force: true });
+        return text(`Deleted skill "${loc.slug}".`);
       },
       { annotations: { readOnlyHint: false } },
     );

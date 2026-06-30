@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { skillSlug, skillDoc, parseSkill } from "../src/skill";
+import { skillSlug, skillDoc, parseSkill, safeSkillDir } from "../src/skill";
 
 describe("skillSlug", () => {
   it("slugifies a normal name", () => {
@@ -54,5 +54,24 @@ describe("parseSkill", () => {
     const p = parseSkill("just instructions, no frontmatter");
     expect(p.name).toBe("");
     expect(p.body).toBe("just instructions, no frontmatter");
+  });
+});
+
+describe("safeSkillDir", () => {
+  it("resolves a normal name to a dir + SKILL.md under root", () => {
+    const loc = safeSkillDir("/vault/skills", "Weekly Review");
+    expect(loc).not.toBeNull();
+    expect(loc!.slug).toBe("weekly-review");
+    expect(loc!.dir).toBe("/vault/skills/weekly-review");
+    expect(loc!.file).toBe("/vault/skills/weekly-review/SKILL.md");
+  });
+  it("returns null when the name yields no usable slug", () => {
+    expect(safeSkillDir("/vault/skills", "...")).toBeNull();
+    expect(safeSkillDir("/vault/skills", "")).toBeNull();
+  });
+  it("neutralizes traversal — the result stays under root", () => {
+    const loc = safeSkillDir("/vault/skills", "../../etc");
+    expect(loc).not.toBeNull();
+    expect(loc!.dir.startsWith("/vault/skills/")).toBe(true);
   });
 });
