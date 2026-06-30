@@ -864,7 +864,8 @@ export class FloatingWidget {
     const list = this.addMsg("odin-history");
     for (const t of this.plugin.threads) {
       const row = list.createDiv({ cls: "odin-hist-row" });
-      row.createSpan({ cls: "odin-hist-title", text: t.title }).onclick = () => this.loadThread(t);
+      row.onclick = () => this.loadThread(t);
+      row.createSpan({ cls: "odin-hist-title", text: t.title });
       const del = this.iconBtn(row, "trash-2", "Delete", async () => {
         this.plugin.threads = this.plugin.threads.filter((x) => x.id !== t.id);
         if (this.thread?.id === t.id) this.thread = null;
@@ -872,6 +873,7 @@ export class FloatingWidget {
         this.showHistory();
       });
       del.addClass("odin-hist-del");
+      del.addEventListener("click", (e) => e.stopPropagation());
     }
   }
   private loadThread(t: ChatThread) {
