@@ -509,17 +509,18 @@ export class FloatingWidget {
       const box = this.addMsg("odin-ask");
       box.createDiv({ cls: "odin-ask-q", text: question });
       const input = box.createEl("input", { cls: "odin-ask-input", attr: { placeholder: "Type your answer…" } });
-      box.createDiv({ cls: "odin-ask-hint", text: "Enter to send" });
+      box.createDiv({ cls: "odin-ask-hint", text: "Enter to send · Esc to skip" });
       input.focus();
       this.pendingAsk = resolve;
+      const send = (answer: string) => {
+        box.empty();
+        box.setText(answer ? `You: ${answer}` : "Skipped");
+        this.pendingAsk = null;
+        resolve(answer);
+      };
       input.onkeydown = (ev: KeyboardEvent) => {
-        if (ev.key === "Enter" && input.value.trim()) {
-          const answer = input.value.trim();
-          box.empty();
-          box.setText(`You: ${answer}`);
-          this.pendingAsk = null;
-          resolve(answer);
-        }
+        if (ev.key === "Enter" && input.value.trim()) { ev.preventDefault(); send(input.value.trim()); return; }
+        if (ev.key === "Escape") { ev.preventDefault(); send(""); }
       };
     });
   }
