@@ -174,8 +174,9 @@ export class FloatingWidget {
       this.pickerMenu(ev, THINKING_LEVELS, this.plugin.settings.chat.thinking, (id) => { this.plugin.settings.chat.thinking = id as ThinkingLevel; }));
     bar.createDiv({ cls: "buddy-spacer" });
     bar.createSpan({ cls: "buddy-esc-hint" });
-    this.send = bar.createEl("button", { cls: "buddy-send" });
-    setIcon(this.send, "arrow-up");
+    this.send = bar.createEl("button", { cls: "buddy-send clickable-icon" });
+    setIcon(this.send, "send");
+    setTooltip(this.send, "Send");
     this.send.onclick = () => (this.busy ? this.stop() : this.submit());
     this.refreshSelectors();
 
@@ -269,7 +270,8 @@ export class FloatingWidget {
     if (on) this.stick = true; // a new run: follow its output until the user scrolls away
     this.card.toggleClass("is-busy", on);
     this.send.toggleClass("is-stop", on);
-    setIcon(this.send, on ? "square" : "arrow-up");
+    setIcon(this.send, on ? "x" : "send");
+    setTooltip(this.send, on ? "Stop" : "Send");
     (this.card.querySelector(".buddy-esc-hint") as HTMLElement)?.setText(on ? "Esc to stop" : "");
   }
 
@@ -395,8 +397,11 @@ export class FloatingWidget {
       onThinking: (d: string) => thinking.reasoning(d),
       onText: (d: string) => reply.append(d),
     };
+    // Tell the agent which note is open so it edits/reads the right file instead of guessing.
+    const openPath = this.plugin.activeMarkdownView()?.file?.path;
+    const prompt = openPath ? `[Currently open note: ${openPath}]\n\n${text}` : text;
     try {
-      const { text: full, sessionId } = await this.plugin.agent.chat(text, thread.sessionId, ui, {
+      const { text: full, sessionId } = await this.plugin.agent.chat(prompt, thread.sessionId, ui, {
         model: cfg.model, thinking: cfg.thinking, allowWeb: this.plugin.settings.allowWeb, abort,
       });
       thread.sessionId = sessionId;
@@ -513,7 +518,8 @@ export class FloatingWidget {
     return new Promise((resolve) => {
       const box = this.addMsg("buddy-ask");
       box.createDiv({ cls: "buddy-ask-q", text: question });
-      const input = box.createEl("input", { cls: "buddy-ask-input", attr: { placeholder: "Your answer…" } });
+      const input = box.createEl("input", { cls: "buddy-ask-input", attr: { placeholder: "Type your answer…" } });
+      box.createDiv({ cls: "buddy-ask-hint", text: "Enter to send" });
       input.focus();
       this.pendingAsk = resolve;
       input.onkeydown = (ev: KeyboardEvent) => {

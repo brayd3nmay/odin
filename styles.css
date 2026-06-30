@@ -135,16 +135,19 @@
 .buddy-ghostsel:hover { background: var(--background-modifier-hover); color: var(--text-normal); }
 .buddy-car { --icon-size: 13px; color: var(--text-faint); display: inline-flex; }
 .buddy-esc-hint { font-size: 11px; color: var(--text-faint); margin-right: 2px; }
-.buddy-send { flex: 0 0 auto; width: 28px; height: 28px; border-radius: var(--radius-m, 8px); border: none; background: var(--interactive-accent); color: var(--text-on-accent); cursor: pointer; display: flex; align-items: center; justify-content: center; --icon-size: 17px; box-shadow: none; }
-.buddy-send:hover { background: var(--interactive-accent-hover); }
-.buddy-send.is-stop { background: var(--background-modifier-hover); color: var(--text-muted); --icon-size: 12px; }
-.buddy-send.is-stop:hover { background: var(--background-modifier-error-hover, var(--background-modifier-error)); color: var(--text-error); }
-.buddy-send.is-stop .svg-icon { fill: currentColor; } /* outline square -> solid stop square */
+/* clickable-icon (Obsidian) sizes the glyph correctly; we just set the size + accent color. */
+.buddy-send { flex: 0 0 auto; --icon-size: 20px; color: var(--interactive-accent); }
+.buddy-send:hover { color: var(--interactive-accent-hover); }
+.buddy-send.is-stop { color: var(--text-muted); }
+.buddy-send.is-stop:hover { color: var(--text-on-accent, #fff); background: var(--background-modifier-error-hover, var(--background-modifier-error)); }
 
-/* ask_user */
-.buddy-ask { background: var(--background-secondary); border-radius: var(--radius-m, 8px); padding: 9px; }
-.buddy-ask-q { font-weight: 600; margin-bottom: 5px; }
-.buddy-ask-input { width: 100%; }
+/* ask_user — an inline question callout with a styled answer field */
+.buddy-ask { background: var(--background-secondary); border: 1px solid var(--interactive-accent); border-radius: var(--radius-m, 8px); padding: 10px 11px; }
+.buddy-ask-q { font-weight: 600; line-height: 1.45; margin-bottom: 8px; }
+.buddy-ask-input { width: 100%; font: inherit; font-size: 13.5px; color: var(--text-normal); background: var(--background-modifier-form-field); border: 1px solid var(--background-modifier-border); border-radius: var(--radius-s, 4px); padding: 6px 9px; outline: none; box-shadow: none; transition: border-color 0.15s; }
+.buddy-ask-input:focus { border-color: var(--background-modifier-border-focus); box-shadow: none; }
+.buddy-ask-input::placeholder { color: var(--text-faint); }
+.buddy-ask-hint { font-size: 11px; color: var(--text-faint); margin-top: 5px; }
 
 /* history */
 .buddy-history { display: flex; flex-direction: column; gap: 4px; }

@@ -26,10 +26,12 @@ export const PROMPTS = {
     "'Gaps & missing points' (important things absent, incomplete, or worth verifying) and " +
     "'Questions to test yourself'. Flag anything that looks factually off. If you need clarification, call ask_user.",
   chat:
-    "You are a helpful assistant embedded in Obsidian, working with the user's note. You may read other notes " +
-    "in the vault and search the web. You can only edit the currently open note, and only via the " +
-    "propose_note_edit tool (the user reviews a diff and approves). Never attempt to edit other files. " +
-    "If you need clarification, call ask_user. Be concise.",
+    "You are a helpful assistant embedded in Obsidian, working with the user's note. The user's message is " +
+    "prefixed with [Currently open note: <path>] (relative to the vault root) telling you exactly which note " +
+    "is open — read that file for context and treat it as the note to edit; do NOT guess from recently " +
+    "modified files. You may read other notes in the vault and search the web. You can only edit the currently " +
+    "open note, and only via the propose_note_edit tool (the user reviews a diff and approves). Never attempt " +
+    "to edit other files. If you need clarification, call ask_user. Be concise.",
 };
 
 // Resolve the user's installed `claude`. Returns undefined to let the SDK use its bundled binary.
