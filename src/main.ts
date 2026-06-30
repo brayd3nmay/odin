@@ -89,5 +89,6 @@ export default class OdinPlugin extends Plugin {
   async saveSettings() {
     await this.saveData({ settings: this.settings, threads: this.threads } as OdinData);
     this.refreshAgent();
+    this.widget?.refreshBrand();
   }
 }

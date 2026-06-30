@@ -8,7 +8,7 @@ import { PROMPTS, StreamHooks, EditResult } from "./agent";
 import { newThread, addMessage, ChatThread } from "./history";
 import { THINKING_LEVELS, FeatureConfig, ThinkingLevel, modelChoices, providerLabel } from "./settings";
 import { SkillInfo } from "./skill";
-import { CLAUDE_SPARK } from "./icons";
+import { brandMark } from "./icons";
 
 type Mode = "collapsed" | "card";
 
@@ -190,6 +190,7 @@ export class FloatingWidget {
   private slashMenu!: HTMLElement;
   private modelSel!: HTMLElement;
   private thinkSel!: HTMLElement;
+  private titleSpark!: HTMLElement;
   private mode: Mode = "collapsed";
   private expanded = false;
   private historyOpen = false;
@@ -220,7 +221,7 @@ export class FloatingWidget {
     this.bubble = this.root.createEl("button", { cls: "odin-bubble" });
     setTooltip(this.bubble, "Open Odin");
     this.bubble.setAttr("aria-label", "Open Odin");
-    html(this.bubble, CLAUDE_SPARK);
+    html(this.bubble, brandMark(this.plugin.settings.provider));
     this.bubble.onclick = () => this.open();
     this.card = this.root.createDiv({ cls: "odin-card", attr: { role: "dialog", "aria-label": "Odin chat" } });
     this.buildChrome();
@@ -231,7 +232,8 @@ export class FloatingWidget {
   private buildChrome() {
     const header = this.card.createDiv({ cls: "odin-header" });
     const title = header.createDiv({ cls: "odin-title" });
-    html(title.createSpan({ cls: "odin-title-spark" }), CLAUDE_SPARK);
+    this.titleSpark = title.createSpan({ cls: "odin-title-spark" });
+    html(this.titleSpark, brandMark(this.plugin.settings.provider));
     title.createSpan({ text: "Odin" });
     header.createDiv({ cls: "odin-spacer" });
     this.iconBtn(header, "plus", "New chat", () => this.newChat());
@@ -391,6 +393,15 @@ export class FloatingWidget {
     return b;
   }
 
+  // Re-render the brand marks (bubble, header, empty-state spark) after the provider changes.
+  refreshBrand() {
+    const mark = brandMark(this.plugin.settings.provider);
+    html(this.bubble, mark);
+    html(this.titleSpark, mark);
+    const empty = this.streamEl.querySelector<HTMLElement>(".odin-empty-spark");
+    if (empty) html(empty, mark);
+  }
+
   private refreshSelectors() {
     const cfg = this.plugin.settings.chat;
     const label = modelChoices(this.plugin.agent.availableProviders())
@@ -445,7 +456,7 @@ export class FloatingWidget {
   private maybeEmpty() {
     if (this.streamEl.childElementCount) return;
     const e = this.streamEl.createDiv({ cls: "odin-empty" });
-    html(e.createSpan({ cls: "odin-empty-spark" }), CLAUDE_SPARK);
+    html(e.createSpan({ cls: "odin-empty-spark" }), brandMark(this.plugin.settings.provider));
     e.createDiv({ text: "Ask about your notes, or type / for commands." });
   }
   private clearEmpty() { this.streamEl.querySelector(".odin-empty")?.remove(); }
