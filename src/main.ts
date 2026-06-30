@@ -77,10 +77,13 @@ export default class OdinPlugin extends Plugin {
     const basePath = (this.app.vault.adapter as FileSystemAdapter).getBasePath();
     this.agent = new AgentClient({
       cwd: basePath,
-      provider: this.settings.provider,
       claudePath: resolveClaudePath(this.settings.claudePath),
       codexPath: resolveCodexPath(this.settings.codexPath),
     });
+  }
+
+  availableProviders() {
+    return this.agent.availableProviders();
   }
 
   async saveSettings() {

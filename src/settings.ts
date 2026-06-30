@@ -5,12 +5,12 @@ export type ThinkingLevel = "off" | "normal" | "high";
 export type FeatureKey = "fixFormatting" | "refine" | "findGaps" | "chat";
 
 export interface FeatureConfig {
+  provider: AgentProvider;
   model: string;
   thinking: ThinkingLevel;
 }
 
 export interface OdinSettings {
-  provider: AgentProvider;
   fixFormatting: FeatureConfig;
   refine: FeatureConfig;
   findGaps: FeatureConfig;
@@ -38,8 +38,6 @@ export const CODEX_MODELS = [
   { id: "gpt-5.4-mini", label: "GPT-5.4 mini" },
 ];
 
-export const MODELS = CLAUDE_MODELS;
-
 export const THINKING_LEVELS: { id: ThinkingLevel; label: string }[] = [
   { id: "off", label: "No thinking" },
   { id: "normal", label: "Think" },
@@ -48,7 +46,7 @@ export const THINKING_LEVELS: { id: ThinkingLevel; label: string }[] = [
 
 export const FEATURE_KEYS: FeatureKey[] = ["fixFormatting", "refine", "findGaps", "chat"];
 
-const PROVIDER_FEATURE_DEFAULTS: Record<AgentProvider, Record<FeatureKey, FeatureConfig>> = {
+const PROVIDER_FEATURE_DEFAULTS: Record<AgentProvider, Record<FeatureKey, Omit<FeatureConfig, "provider">>> = {
   claude: {
     fixFormatting: { model: "haiku", thinking: "off" },
     refine: { model: "sonnet", thinking: "normal" },
@@ -63,8 +61,26 @@ const PROVIDER_FEATURE_DEFAULTS: Record<AgentProvider, Record<FeatureKey, Featur
   },
 };
 
-export function modelsForProvider(provider: AgentProvider) {
-  return provider === "codex" ? CODEX_MODELS : CLAUDE_MODELS;
+export interface ModelChoice {
+  provider: AgentProvider;
+  id: string;
+  label: string;
+}
+
+// All models from the given providers, tagged with provider and a "Provider · Model" label
+// for the unified picker. Pass the connected providers to filter.
+export function modelChoices(providers: AgentProvider[]): ModelChoice[] {
+  const byProvider: Record<AgentProvider, { id: string; label: string }[]> = {
+    claude: CLAUDE_MODELS,
+    codex: CODEX_MODELS,
+  };
+  return providers.flatMap((provider) =>
+    byProvider[provider].map((m) => ({ provider, id: m.id, label: `${providerLabel(provider)} · ${m.label}` })),
+  );
+}
+
+function modelIds(provider: AgentProvider): Set<string> {
+  return new Set((provider === "codex" ? CODEX_MODELS : CLAUDE_MODELS).map((m) => m.id));
 }
 
 export function providerLabel(provider: AgentProvider): string {
@@ -72,37 +88,38 @@ export function providerLabel(provider: AgentProvider): string {
 }
 
 export function defaultFeatureConfig(provider: AgentProvider, key: FeatureKey): FeatureConfig {
-  return { ...PROVIDER_FEATURE_DEFAULTS[provider][key] };
+  return { provider, ...PROVIDER_FEATURE_DEFAULTS[provider][key] };
 }
 
-function validProvider(value: unknown): AgentProvider {
-  return value === "codex" ? "codex" : "claude";
+function validProvider(value: unknown, fallback: AgentProvider): AgentProvider {
+  return value === "codex" || value === "claude" ? value : fallback;
 }
 
 function validThinking(value: unknown, fallback: ThinkingLevel): ThinkingLevel {
   return value === "off" || value === "normal" || value === "high" ? value : fallback;
 }
 
-function normalizeFeatureConfig(provider: AgentProvider, key: FeatureKey, stored: unknown): FeatureConfig {
-  const base = defaultFeatureConfig(provider, key);
+function normalizeFeatureConfig(fallbackProvider: AgentProvider, key: FeatureKey, stored: unknown): FeatureConfig {
   const partial = typeof stored === "object" && stored !== null ? stored as Partial<FeatureConfig> : {};
-  const allowedModels = new Set(modelsForProvider(provider).map((m) => m.id));
-  const model = typeof partial.model === "string" && allowedModels.has(partial.model) ? partial.model : base.model;
+  const provider = validProvider(partial.provider, fallbackProvider);
+  const base = defaultFeatureConfig(provider, key);
+  const model = typeof partial.model === "string" && modelIds(provider).has(partial.model) ? partial.model : base.model;
   return {
+    provider,
     model,
     thinking: validThinking(partial.thinking, base.thinking),
   };
 }
 
 export function normalizeSettings(stored: unknown): OdinSettings {
-  const data = typeof stored === "object" && stored !== null ? stored as Partial<OdinSettings> : {};
-  const provider = validProvider(data.provider);
+  const data = typeof stored === "object" && stored !== null ? stored as Partial<OdinSettings> & { provider?: unknown } : {};
+  // Legacy saves carried a top-level `provider`; use it only to migrate per-feature provider.
+  const legacyProvider = validProvider(data.provider, "claude");
   return {
-    provider,
-    fixFormatting: normalizeFeatureConfig(provider, "fixFormatting", data.fixFormatting),
-    refine: normalizeFeatureConfig(provider, "refine", data.refine),
-    findGaps: normalizeFeatureConfig(provider, "findGaps", data.findGaps),
-    chat: normalizeFeatureConfig(provider, "chat", data.chat),
+    fixFormatting: normalizeFeatureConfig(legacyProvider, "fixFormatting", data.fixFormatting),
+    refine: normalizeFeatureConfig(legacyProvider, "refine", data.refine),
+    findGaps: normalizeFeatureConfig(legacyProvider, "findGaps", data.findGaps),
+    chat: normalizeFeatureConfig(legacyProvider, "chat", data.chat),
     styleGuide: typeof data.styleGuide === "string" ? data.styleGuide : "",
     allowWeb: typeof data.allowWeb === "boolean" ? data.allowWeb : true,
     claudePath: typeof data.claudePath === "string" ? data.claudePath : "",
@@ -111,11 +128,10 @@ export function normalizeSettings(stored: unknown): OdinSettings {
 }
 
 export const DEFAULT_SETTINGS: OdinSettings = {
-  provider: "claude",
-  fixFormatting: { model: "haiku", thinking: "off" },
-  refine: { model: "sonnet", thinking: "normal" },
-  findGaps: { model: "sonnet", thinking: "high" },
-  chat: { model: "sonnet", thinking: "normal" },
+  fixFormatting: { provider: "claude", model: "haiku", thinking: "off" },
+  refine: { provider: "claude", model: "sonnet", thinking: "normal" },
+  findGaps: { provider: "claude", model: "sonnet", thinking: "high" },
+  chat: { provider: "claude", model: "sonnet", thinking: "normal" },
   styleGuide: "",
   allowWeb: true,
   claudePath: "",
@@ -129,6 +145,7 @@ export function thinkingTokens(level: ThinkingLevel): number {
 interface PluginLike {
   settings: OdinSettings;
   saveSettings(): Promise<void>;
+  availableProviders(): AgentProvider[];
 }
 
 export class OdinSettingTab extends PluginSettingTab {
@@ -140,15 +157,18 @@ export class OdinSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
 
+    const choices = modelChoices(this.plugin.availableProviders());
+    const choiceKey = (provider: AgentProvider, model: string) => `${provider}:${model}`;
     const featureRow = (name: string, key: FeatureKey) => {
       const cfg = this.plugin.settings[key];
       new Setting(containerEl)
         .setName(name)
         .setDesc("Model and thinking level")
         .addDropdown((d) => {
-          for (const m of modelsForProvider(this.plugin.settings.provider)) d.addOption(m.id, m.label);
-          d.setValue(cfg.model).onChange(async (v) => {
-            cfg.model = v;
+          for (const c of choices) d.addOption(choiceKey(c.provider, c.id), c.label);
+          d.setValue(choiceKey(cfg.provider, cfg.model)).onChange(async (v) => {
+            const picked = choices.find((c) => choiceKey(c.provider, c.id) === v);
+            if (picked) { cfg.provider = picked.provider; cfg.model = picked.id; }
             await this.plugin.saveSettings();
           });
         })
@@ -160,19 +180,6 @@ export class OdinSettingTab extends PluginSettingTab {
           });
         });
     };
-
-    new Setting(containerEl).setName("Agent").setHeading();
-    new Setting(containerEl)
-      .setName("Provider")
-      .setDesc("Use your local logged-in Claude Code or Codex CLI session.")
-      .addDropdown((d) => {
-        for (const p of PROVIDERS) d.addOption(p.id, p.label);
-        d.setValue(this.plugin.settings.provider).onChange(async (v) => {
-          this.plugin.settings = normalizeSettings({ ...this.plugin.settings, provider: v as AgentProvider });
-          await this.plugin.saveSettings();
-          this.display();
-        });
-      });
 
     new Setting(containerEl).setName("Defaults per feature").setHeading();
     featureRow("Fix Formatting", "fixFormatting");

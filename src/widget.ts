@@ -6,7 +6,7 @@ import { showDiff, hideDiff } from "./editor-diff";
 import { planDiff } from "./diffplan";
 import { PROMPTS, StreamHooks, EditResult } from "./agent";
 import { newThread, addMessage, ChatThread } from "./history";
-import { THINKING_LEVELS, FeatureConfig, ThinkingLevel, modelsForProvider, providerLabel } from "./settings";
+import { THINKING_LEVELS, FeatureConfig, ThinkingLevel, modelChoices, providerLabel } from "./settings";
 import { SkillInfo } from "./skill";
 import { CLAUDE_SPARK } from "./icons";
 
@@ -262,8 +262,15 @@ export class FloatingWidget {
       attr: { placeholder: PLACEHOLDER, rows: "1" },
     });
     const bar = this.field.createDiv({ cls: "odin-inbar" });
-    this.modelSel = this.ghostSelect(bar, (ev) =>
-      this.pickerMenu(ev, modelsForProvider(this.plugin.settings.provider), this.plugin.settings.chat.model, (id) => { this.plugin.settings.chat.model = id; }));
+    this.modelSel = this.ghostSelect(bar, (ev) => {
+      const cfg = this.plugin.settings.chat;
+      const items = modelChoices(this.plugin.agent.availableProviders()).map((c) => ({ id: `${c.provider}:${c.id}`, label: c.label }));
+      this.pickerMenu(ev, items, `${cfg.provider}:${cfg.model}`, (key) => {
+        const [provider, ...rest] = key.split(":");
+        cfg.provider = provider as typeof cfg.provider;
+        cfg.model = rest.join(":");
+      });
+    });
     this.thinkSel = this.ghostSelect(bar, (ev) =>
       this.pickerMenu(ev, THINKING_LEVELS, this.plugin.settings.chat.thinking, (id) => { this.plugin.settings.chat.thinking = id as ThinkingLevel; }));
     bar.createDiv({ cls: "odin-spacer" });
@@ -386,9 +393,11 @@ export class FloatingWidget {
 
   private refreshSelectors() {
     const cfg = this.plugin.settings.chat;
-    const model = modelsForProvider(this.plugin.settings.provider).find((m) => m.id === cfg.model)?.label ?? cfg.model;
+    const label = modelChoices(this.plugin.agent.availableProviders())
+      .find((c) => c.provider === cfg.provider && c.id === cfg.model)?.label
+      ?? `${providerLabel(cfg.provider)} · ${cfg.model}`;
     const think = THINKING_LEVELS.find((t) => t.id === cfg.thinking)?.label ?? cfg.thinking;
-    this.modelSel.setText(`${providerLabel(this.plugin.settings.provider)}: ${model}`);
+    this.modelSel.setText(label);
     setIcon(this.modelSel.createSpan({ cls: "odin-car" }), "chevron-down");
     this.thinkSel.setText(think);
     setIcon(this.thinkSel.createSpan({ cls: "odin-car" }), "chevron-down");
@@ -564,7 +573,7 @@ export class FloatingWidget {
     const abort = this.track(new AbortController());
     try {
       const proposed = await this.plugin.agent.transform(this.basePromptFor(kind), region.text, {
-        model: cfg.model, thinking: cfg.thinking, allowWeb: false, abort,
+        provider: cfg.provider, model: cfg.model, thinking: cfg.thinking, allowWeb: false, abort,
       }, { onThinking: (d) => thinking.reasoning(d) });
       thinking.collapse();
       this.setBusy(false);
@@ -598,7 +607,7 @@ export class FloatingWidget {
           onThinking: (d) => tx.thinking(d),
           onText: (d) => tx.text(d),
         },
-        { model: cfg.model, thinking: cfg.thinking, allowWeb: this.plugin.settings.allowWeb, abort },
+        { provider: cfg.provider, model: cfg.model, thinking: cfg.thinking, allowWeb: this.plugin.settings.allowWeb, abort },
       );
       tx.finish(report);
       this.setBusy(false);
@@ -653,7 +662,7 @@ export class FloatingWidget {
     const prompt = openPath ? `[Currently open note: ${openPath}]\n\n${text}` : text;
     try {
       const { text: full, sessionId } = await this.plugin.agent.chat(prompt, thread.sessionId, ui, {
-        model: cfg.model, thinking: cfg.thinking, allowWeb: this.plugin.settings.allowWeb, abort,
+        provider: cfg.provider, model: cfg.model, thinking: cfg.thinking, allowWeb: this.plugin.settings.allowWeb, abort,
       });
       thread.sessionId = sessionId;
       tx.finish(full);
