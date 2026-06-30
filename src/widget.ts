@@ -3,6 +3,7 @@ import type { EditorView } from "@codemirror/view";
 import type BuddyPlugin from "./main";
 import { getRegion, applyRegion, Region, LineEditor } from "./edit";
 import { showDiff, hideDiff } from "./editor-diff";
+import { planDiff } from "./diffplan";
 import { PROMPTS, StreamHooks } from "./agent";
 import { newThread, addMessage, ChatThread } from "./history";
 import { MODELS, THINKING_LEVELS, FeatureConfig } from "./settings";
@@ -36,15 +37,29 @@ class Thinking {
   private done = false;
 
   constructor(parent: HTMLElement, scroll: () => void) {
-    this.el = parent.createDiv({ cls: "buddy-think" });
+    // Collapsed by default: the head is a one-line toggle; the steps + reasoning stay hidden until expanded.
+    this.el = parent.createDiv({ cls: "buddy-think is-collapsed" });
     this.head = this.el.createDiv({ cls: "buddy-think-head" });
-    this.head.createSpan({ cls: "buddy-spinner" });
-    this.head.createSpan({ cls: "buddy-think-label", text: "Thinking…" });
+    this.head.onclick = () => this.el.toggleClass("is-collapsed", !this.el.hasClass("is-collapsed"));
     this.steps = this.el.createDiv({ cls: "buddy-steps" });
     this.reason = this.el.createDiv({ cls: "buddy-think-reason" });
     this.scroll = scroll;
+    this.renderHead();
   }
   private scroll: () => void;
+
+  // Live: chevron + spinner + "Thinking…". Done: chevron + "Thought for Ns".
+  private renderHead() {
+    this.head.empty();
+    this.head.createSpan({ cls: "buddy-chev", text: "▾" });
+    if (this.done) {
+      const secs = ((Date.now() - this.start) / 1000).toFixed(1);
+      this.head.createSpan({ text: `Thought for ${secs}s` });
+    } else {
+      this.head.createSpan({ cls: "buddy-spinner" });
+      this.head.createSpan({ cls: "buddy-think-label", text: "Thinking…" });
+    }
+  }
 
   tool(name: string) {
     const label = toolLabel(name);
@@ -74,12 +89,7 @@ class Thinking {
     if (this.done) return;
     this.done = true;
     this.markLastDone();
-    const secs = ((Date.now() - this.start) / 1000).toFixed(1);
-    this.head.empty();
-    this.head.addClass("is-summary");
-    this.head.createSpan({ cls: "buddy-chev", text: "▾" });
-    this.head.createSpan({ text: `Thought for ${secs}s` });
-    this.head.onclick = () => this.el.toggleClass("is-collapsed", !this.el.hasClass("is-collapsed"));
+    this.renderHead();
   }
 }
 
@@ -230,7 +240,7 @@ export class FloatingWidget {
     this.card.toggleClass("is-open", mode === "card");
   }
   open() { this.setMode("card"); this.input?.focus(); }
-  close() { this.setMode("collapsed"); }
+  close() { this.pendingDiff?.reject(); this.setMode("collapsed"); }
   toggle() { this.mode === "card" ? this.close() : this.open(); }
   expand() { this.expanded = !this.expanded; this.card.toggleClass("is-expanded", this.expanded); }
   destroy() { this.cancelAll(); this.root.remove(); }
@@ -437,6 +447,12 @@ export class FloatingWidget {
 
   // ---- in-editor diff preview + panel controls ----
   private presentEdit(view: any, editor: LineEditor, region: Region, proposed: string, steer?: (instruction: string) => void): Promise<boolean> {
+    // No-op edit: nothing to add or delete → don't force a diff, just say so.
+    const plan = planDiff(region.text, proposed);
+    if (!plan.dels.length && !plan.adds.length) {
+      this.addMsg("buddy-status-ok", "No changes needed.");
+      return Promise.resolve(false);
+    }
     return new Promise((resolve) => {
       const cm = (view.editor as any).cm as EditorView;
       this.clearDiff();
