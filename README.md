@@ -1,6 +1,6 @@
 # Odin
 
-A floating Claude assistant for [Obsidian](https://obsidian.md/) that fixes formatting, refines notes, finds gaps in your thinking, and chats about your ideas — powered by the [Claude Agent SDK](https://docs.anthropic.com/agents/overview).
+A floating Odin assistant for [Obsidian](https://obsidian.md/) that fixes formatting, refines notes, finds gaps in your thinking, and chats about your ideas — powered by the [Claude Agent SDK](https://docs.anthropic.com/agents/overview).
 
 **Desktop-only plugin** that requires the [Claude Code CLI](https://claude.ai/code) installed and logged in. No API key required — Odin authenticates through your existing Claude login.
 
@@ -34,22 +34,22 @@ A floating Claude assistant for [Obsidian](https://obsidian.md/) that fixes form
 ### Fix Formatting
 Fixes **capitalization and punctuation only** — useful for cleaning up voice-to-text notes. No words are added, removed, or reordered; structure and formatting are always preserved.
 
-**Trigger:** Click the "Fix Formatting" chip in the Odin widget, or use `Claude: Fix Formatting` from the editor context menu or command palette.
+**Trigger:** Click the "Fix Formatting" chip in the Odin widget, or use `Odin: Fix Formatting` from the editor context menu or command palette.
 
 ### Refine
 Improves readability by applying **Markdown formatting (headings, lists, bold, italics)** without changing wording. Respects your optional formatting style guide configured in settings.
 
-**Trigger:** Click the "Refine" chip, or use `Claude: Refine` from the command menu.
+**Trigger:** Click the "Refine" chip, or use `Odin: Refine` from the command menu.
 
 ### Find Gaps
 Analyzes your note in a **read-only mode** and surfaces missing points, incomplete ideas, and things worth verifying. Can search related notes in your vault and optionally search the web (see settings). Never edits your notes.
 
-**Trigger:** Click the "Find Gaps" chip, or use `Claude: Find Gaps`.
+**Trigger:** Click the "Find Gaps" chip, or use `Odin: Find Gaps`.
 
 ### Chat
 A **vault-aware conversational assistant** that understands your notes and can suggest edits (which you review and approve). Supports web search (optional), model selection, and extended thinking. Chat history is persistent.
 
-**Trigger:** Type in the input box at the bottom of the Odin widget. Claude can propose edits via a clear diff preview; you accept or reject each one.
+**Trigger:** Type in the input box at the bottom of the Odin widget. Odin can propose edits via a clear diff preview; you accept or reject each one.
 
 ## Settings
 

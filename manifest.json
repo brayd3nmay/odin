@@ -3,7 +3,7 @@
   "name": "Odin",
   "version": "0.1.0",
   "minAppVersion": "1.5.0",
-  "description": "A floating Claude assistant that fixes formatting, refines notes, finds gaps, and chats — powered by the Claude Agent SDK.",
+  "description": "A floating Odin assistant that fixes formatting, refines notes, finds gaps, and chats — powered by the Claude Agent SDK.",
   "author": "Brayden May",
   "isDesktopOnly": true
 }

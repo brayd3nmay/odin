@@ -32,8 +32,8 @@ export default class OdinPlugin extends Plugin {
     this.registerEditorExtension(odinDiffField);
 
     this.addCommand({
-      id: "toggle-claude-widget",
-      name: "Toggle Claude widget",
+      id: "toggle-odin-widget",
+      name: "Toggle Odin widget",
       callback: () => this.widget.toggle(),
     });
 
@@ -53,7 +53,7 @@ export default class OdinPlugin extends Plugin {
       this.app.workspace.on("editor-menu", (menu) => {
         for (const a of actions) {
           menu.addItem((item) =>
-            item.setTitle(`Claude: ${a.name}`).setIcon("sparkles").onClick(() => this.widget.runQuickAction(a.kind)),
+            item.setTitle(`Odin: ${a.name}`).setIcon("sparkles").onClick(() => this.widget.runQuickAction(a.kind)),
           );
         }
       }),
