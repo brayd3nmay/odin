@@ -1,7 +1,7 @@
 {
   "name": "odin",
   "version": "0.1.0",
-  "description": "Floating Claude assistant for Obsidian.",
+  "description": "Floating Odin assistant for Obsidian.",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",

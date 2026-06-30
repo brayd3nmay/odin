@@ -132,7 +132,7 @@ export class FloatingWidget {
     const header = this.card.createDiv({ cls: "odin-header" });
     const title = header.createDiv({ cls: "odin-title" });
     html(title.createSpan({ cls: "odin-title-spark" }), CLAUDE_SPARK);
-    title.createSpan({ text: "Claude" });
+    title.createSpan({ text: "Odin" });
     header.createDiv({ cls: "odin-spacer" });
     this.iconBtn(header, "plus", "New chat", () => this.newChat());
     const histBtn = this.iconBtn(header, "clock", "History", () => this.toggleHistory());
