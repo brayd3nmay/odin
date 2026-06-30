@@ -1,4 +1,4 @@
-import { Menu, setTooltip } from "obsidian";
+import { Menu, setTooltip, setIcon } from "obsidian";
 import type { EditorView } from "@codemirror/view";
 import type BuddyPlugin from "./main";
 import { getRegion, applyRegion, Region, LineEditor } from "./edit";
@@ -7,7 +7,7 @@ import { planDiff } from "./diffplan";
 import { PROMPTS, StreamHooks } from "./agent";
 import { newThread, addMessage, ChatThread } from "./history";
 import { MODELS, THINKING_LEVELS, FeatureConfig } from "./settings";
-import { CLAUDE_SPARK, icon } from "./icons";
+import { CLAUDE_SPARK } from "./icons";
 
 type Mode = "collapsed" | "card";
 
@@ -51,7 +51,7 @@ class Thinking {
   // Live: chevron + spinner + "Thinking…". Done: chevron + "Thought for Ns".
   private renderHead() {
     this.head.empty();
-    this.head.createSpan({ cls: "buddy-chev", text: "▾" });
+    setIcon(this.head.createSpan({ cls: "buddy-chev" }), "chevron-right");
     if (this.done) {
       const secs = ((Date.now() - this.start) / 1000).toFixed(1);
       this.head.createSpan({ text: `Thought for ${secs}s` });
@@ -81,7 +81,7 @@ class Thinking {
   private markLastDone() {
     if (this.lastStep) {
       this.lastStep.removeClass("is-live");
-      html(this.lastStep.querySelector(".buddy-step-ic") as HTMLElement, icon("tick-02"));
+      setIcon(this.lastStep.querySelector(".buddy-step-ic") as HTMLElement, "check");
     }
   }
 
@@ -101,6 +101,7 @@ export class FloatingWidget {
   private input!: HTMLTextAreaElement;
   private field!: HTMLElement;
   private send!: HTMLElement;
+  private editPop!: HTMLElement;
   private modelSel!: HTMLElement;
   private thinkSel!: HTMLElement;
   private mode: Mode = "collapsed";
@@ -109,6 +110,8 @@ export class FloatingWidget {
   private pendingAsk: ((answer: string) => void) | null = null;
   private aborters = new Set<AbortController>();
   private busy = false;
+  // Auto-scroll follows new output only while the user is already at the bottom (see scroll()).
+  private stick = true;
 
   // The currently-previewed edit (diff shown in the editor; controls in the panel).
   private pendingDiff: {
@@ -135,38 +138,46 @@ export class FloatingWidget {
     html(title.createSpan({ cls: "buddy-title-spark" }), CLAUDE_SPARK);
     title.createSpan({ text: "Claude" });
     header.createDiv({ cls: "buddy-spacer" });
-    const histBtn = this.iconBtn(header, "clock-01", "History", () => this.showHistory());
+    const histBtn = this.iconBtn(header, "clock", "History", () => this.showHistory());
     histBtn.addClass("buddy-hist");
     header.createDiv({ cls: "buddy-divider" });
-    this.iconBtn(header, "minus-sign", "Minimize", () => this.close());
-    this.iconBtn(header, "arrow-expand-01", "Expand", () => this.expand());
-    this.iconBtn(header, "cancel-01", "Close", () => this.close());
+    this.iconBtn(header, "minus", "Minimize", () => this.close());
+    this.iconBtn(header, "maximize-2", "Expand", () => this.expand());
+    this.iconBtn(header, "x", "Close", () => this.close());
 
     this.streamEl = this.card.createDiv({ cls: "buddy-stream" });
+    // Track whether the user is parked at the bottom; if they scroll up to read (e.g. the
+    // thinking), we stop auto-scrolling so streaming output doesn't yank them back down.
+    this.streamEl.addEventListener("scroll", () => {
+      const el = this.streamEl;
+      this.stick = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+    });
+
+    // composer zone, wrapped so the edit-approval popup can float above it (anchored, not in-stream)
+    const composer = this.card.createDiv({ cls: "buddy-composer" });
+    this.editPop = composer.createDiv({ cls: "buddy-editpop" });
 
     // quick actions: big icons, left aligned, own hover color
-    const actions = this.card.createDiv({ cls: "buddy-actions" });
-    this.quickAction(actions, "fix", "text-check", "Fix formatting");
-    this.quickAction(actions, "refine", "magic-wand-02", "Refine");
-    this.quickAction(actions, "gaps", "search-01", "Find gaps");
+    const actions = composer.createDiv({ cls: "buddy-actions" });
+    this.quickAction(actions, "fix", "list-checks", "Fix formatting");
+    this.quickAction(actions, "refine", "wand-2", "Refine");
+    this.quickAction(actions, "gaps", "search", "Find gaps");
 
-    // footer: input row + (model · thinking) on the bottom
-    const footer = this.card.createDiv({ cls: "buddy-footer" });
-    const inputRow = footer.createDiv({ cls: "buddy-inputrow" });
-    this.field = inputRow.createDiv({ cls: "buddy-field" });
+    // composer: one input box holds the textarea with an inner toolbar (model · thinking · send)
+    const footer = composer.createDiv({ cls: "buddy-footer" });
+    this.field = footer.createDiv({ cls: "buddy-field" });
     this.input = this.field.createEl("textarea", {
       cls: "buddy-input",
       attr: { placeholder: "Ask anything…", rows: "1" },
     });
-    this.send = inputRow.createEl("button", { cls: "buddy-send" });
-    html(this.send, icon("arrow-up-01"));
+    const bar = this.field.createDiv({ cls: "buddy-inbar" });
+    this.modelSel = this.ghostSelect(bar, (ev) => this.modelMenu(ev));
+    this.thinkSel = this.ghostSelect(bar, (ev) => this.thinkMenu(ev));
+    bar.createDiv({ cls: "buddy-spacer" });
+    bar.createSpan({ cls: "buddy-esc-hint" });
+    this.send = bar.createEl("button", { cls: "buddy-send" });
+    setIcon(this.send, "arrow-up");
     this.send.onclick = () => (this.busy ? this.stop() : this.submit());
-
-    const botRow = footer.createDiv({ cls: "buddy-botrow" });
-    this.modelSel = this.ghostSelect(botRow, (ev) => this.modelMenu(ev));
-    this.thinkSel = this.ghostSelect(botRow, (ev) => this.thinkMenu(ev));
-    botRow.createDiv({ cls: "buddy-spacer" });
-    botRow.createSpan({ cls: "buddy-esc-hint" });
     this.refreshSelectors();
 
     this.input.onfocus = () => this.field.addClass("is-focus");
@@ -174,17 +185,17 @@ export class FloatingWidget {
     this.input.onkeydown = (ev: KeyboardEvent) => this.onInputKey(ev);
   }
 
-  private iconBtn(parent: HTMLElement, name: Parameters<typeof icon>[0], tip: string, onClick: () => void): HTMLElement {
-    const b = parent.createEl("button", { cls: "buddy-iconbtn" });
-    html(b, icon(name));
+  private iconBtn(parent: HTMLElement, name: string, tip: string, onClick: () => void): HTMLElement {
+    const b = parent.createEl("button", { cls: "buddy-iconbtn clickable-icon" });
+    setIcon(b, name);
     setTooltip(b, tip);
     b.onclick = onClick;
     return b;
   }
 
-  private quickAction(parent: HTMLElement, kind: "fix" | "refine" | "gaps", name: Parameters<typeof icon>[0], label: string) {
+  private quickAction(parent: HTMLElement, kind: "fix" | "refine" | "gaps", name: string, label: string) {
     const b = parent.createEl("button", { cls: `buddy-qa buddy-qa-${kind}` });
-    html(b.createSpan({ cls: "buddy-qa-ic" }), icon(name));
+    setIcon(b.createSpan({ cls: "buddy-qa-ic" }), name);
     b.createSpan({ text: label });
     b.onclick = () => this.runQuickAction(kind);
   }
@@ -200,9 +211,9 @@ export class FloatingWidget {
     const model = MODELS.find((m) => m.id === cfg.model)?.label ?? cfg.model;
     const think = THINKING_LEVELS.find((t) => t.id === cfg.thinking)?.label ?? cfg.thinking;
     this.modelSel.setText(model);
-    this.modelSel.createSpan({ cls: "buddy-car", text: "▾" });
+    setIcon(this.modelSel.createSpan({ cls: "buddy-car" }), "chevron-down");
     this.thinkSel.setText(think);
-    this.thinkSel.createSpan({ cls: "buddy-car", text: "▾" });
+    setIcon(this.thinkSel.createSpan({ cls: "buddy-car" }), "chevron-down");
   }
 
   private modelMenu(ev: MouseEvent) {
@@ -239,7 +250,7 @@ export class FloatingWidget {
     this.bubble.toggleClass("is-hidden", mode === "card");
     this.card.toggleClass("is-open", mode === "card");
   }
-  open() { this.setMode("card"); this.input?.focus(); }
+  open() { this.stick = true; this.setMode("card"); this.input?.focus(); }
   close() { this.pendingDiff?.reject(); this.setMode("collapsed"); }
   toggle() { this.mode === "card" ? this.close() : this.open(); }
   expand() { this.expanded = !this.expanded; this.card.toggleClass("is-expanded", this.expanded); }
@@ -252,7 +263,7 @@ export class FloatingWidget {
     this.scroll();
     return el;
   }
-  private scroll() { this.streamEl.scrollTop = this.streamEl.scrollHeight; }
+  private scroll() { if (this.stick) this.streamEl.scrollTop = this.streamEl.scrollHeight; }
   private showError(el: HTMLElement, e: unknown) {
     if ((e as any)?.name === "AbortError") { el.remove(); return; }
     el.setText("Error: " + (e instanceof Error ? e.message : String(e)));
@@ -270,9 +281,10 @@ export class FloatingWidget {
 
   private setBusy(on: boolean) {
     this.busy = on;
+    if (on) this.stick = true; // a new run: follow its output until the user scrolls away
     this.card.toggleClass("is-busy", on);
     this.send.toggleClass("is-stop", on);
-    html(this.send, icon(on ? "stop" : "arrow-up-01"));
+    setIcon(this.send, on ? "square" : "arrow-up");
     (this.card.querySelector(".buddy-esc-hint") as HTMLElement)?.setText(on ? "Esc to stop" : "");
   }
 
@@ -458,26 +470,30 @@ export class FloatingWidget {
       this.clearDiff();
       showDiff(cm, region.fromLine, region.text, proposed);
 
-      const card = this.addMsg("buddy-noteref");
-      html(card.createSpan({ cls: "buddy-noteref-ic" }), icon("note-01"));
-      card.createSpan({ text: "Proposed an edit — changes are highlighted in your note." });
-      const acts = this.addMsg("buddy-editacts");
+      // Approval prompt floats above the composer (see .buddy-editpop) so it stays put while the
+      // diff is reviewed, instead of scrolling away in the stream.
+      const pop = this.editPop;
+      pop.empty();
+      const head = pop.createDiv({ cls: "buddy-editpop-head" });
+      setIcon(head.createSpan({ cls: "buddy-editpop-ic" }), "file-text");
+      head.createSpan({ cls: "buddy-editpop-title", text: "Apply this edit to your note?" });
+      pop.createDiv({ cls: "buddy-editpop-sub", text: "Changes are highlighted in your note." });
+      const acts = pop.createDiv({ cls: "buddy-editacts" });
       const accept = acts.createEl("button", { cls: "buddy-pb is-accept" });
-      html(accept.createSpan({ cls: "buddy-pb-ic" }), icon("tick-02"));
+      setIcon(accept.createSpan({ cls: "buddy-pb-ic" }), "check");
       accept.createSpan({ text: "Accept" });
       accept.createSpan({ cls: "buddy-kbd", text: "⌘↵" });
       const reject = acts.createEl("button", { cls: "buddy-pb" });
       reject.createSpan({ text: "Reject" });
       reject.createSpan({ cls: "buddy-kbd", text: "Esc" });
+      pop.addClass("is-shown");
 
       this.enterSteer();
       const finish = (applied: boolean) => {
         this.exitSteer();
-        this.clearDiff();
-        acts.remove();
-        card.setText(applied ? "✓ Applied to your note." : "Discarded.");
-        card.removeClass("buddy-noteref");
-        card.addClass(applied ? "buddy-status-ok" : "buddy-status");
+        this.clearDiff(); // also hides the popup
+        this.addMsg(applied ? "buddy-status-ok" : "buddy-status")
+          .setText(applied ? "✓ Applied to your note." : "Discarded.");
         resolve(applied);
       };
       this.pendingDiff = {
@@ -485,7 +501,7 @@ export class FloatingWidget {
         // Clear the preview decorations before mutating the doc so nothing maps through the change.
         accept: () => { this.clearDiff(); applyRegion(editor, region, proposed); finish(true); },
         reject: () => finish(false),
-        steer: steer ? (instr) => { this.clearDiff(); acts.remove(); card.remove(); steer(instr); } : () => {},
+        steer: steer ? (instr) => { this.clearDiff(); steer(instr); } : () => {},
       };
       accept.onclick = () => this.pendingDiff?.accept();
       reject.onclick = () => this.pendingDiff?.reject();
@@ -504,6 +520,8 @@ export class FloatingWidget {
   private clearDiff() {
     if (this.pendingDiff) { try { hideDiff(this.pendingDiff.view); } catch { /* view gone */ } }
     this.pendingDiff = null;
+    this.editPop?.empty();
+    this.editPop?.removeClass("is-shown");
   }
 
   // Chat's edit tool: diff the whole open note against the proposed content.
@@ -543,7 +561,7 @@ export class FloatingWidget {
     }
     return this.thread;
   }
-  private resetStream() { this.clearPending(); this.clearDiff(); this.streamEl.empty(); }
+  private resetStream() { this.stick = true; this.clearPending(); this.clearDiff(); this.streamEl.empty(); }
 
   private basePromptFor(kind: "fix" | "refine"): string {
     return kind === "fix" ? PROMPTS.fixFormatting : PROMPTS.refine(this.plugin.settings.styleGuide);
@@ -558,7 +576,7 @@ export class FloatingWidget {
     for (const t of this.plugin.threads) {
       const row = list.createDiv({ cls: "buddy-hist-row" });
       row.createSpan({ cls: "buddy-hist-title", text: t.title }).onclick = () => this.loadThread(t);
-      const del = this.iconBtn(row, "cancel-01", "Delete", async () => {
+      const del = this.iconBtn(row, "x", "Delete", async () => {
         this.plugin.threads = this.plugin.threads.filter((x) => x.id !== t.id);
         if (this.thread?.id === t.id) this.thread = null;
         await this.plugin.saveSettings();
