@@ -1,5 +1,6 @@
 import { Plugin, FileSystemAdapter, MarkdownView } from "obsidian";
-import { OdinSettings, OdinSettingTab, normalizeSettings } from "./settings";
+import * as path from "path";
+import { OdinSettings, OdinSettingTab, normalizeSettings, AgentProvider } from "./settings";
 import { ChatThread } from "./history";
 import { AgentClient, resolveClaudePath, resolveCodexPath } from "./agent";
 import { FloatingWidget } from "./widget";
@@ -75,8 +76,12 @@ export default class OdinPlugin extends Plugin {
 
   refreshAgent() {
     const basePath = (this.app.vault.adapter as FileSystemAdapter).getBasePath();
+    // Odin's own skill store lives under the plugin's own folder, NOT the vault's .claude/skills — so
+    // the user's personal Claude Code skills never collide with or bleed into Odin's.
+    const pluginDir = this.manifest.dir ?? path.join(this.app.vault.configDir, "plugins", this.manifest.id);
     this.agent = new AgentClient({
       cwd: basePath,
+      skillsDir: path.join(basePath, pluginDir, "skills"),
       claudePath: resolveClaudePath(this.settings.claudePath),
       codexPath: resolveCodexPath(this.settings.codexPath),
     });
@@ -84,6 +89,18 @@ export default class OdinPlugin extends Plugin {
 
   availableProviders() {
     return this.agent.availableProviders();
+  }
+
+  checkProvider(provider: AgentProvider) {
+    return this.agent.checkProvider(provider);
+  }
+
+  listSkills() {
+    return this.agent.listSkills();
+  }
+
+  removeSkill(slug: string) {
+    return this.agent.removeSkill(slug);
   }
 
   async saveSettings() {

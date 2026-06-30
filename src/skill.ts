@@ -1,6 +1,7 @@
-// Pure helpers for authoring a Claude Code skill file. No SDK/obsidian/fs imports so the slug
-// sanitization (a path-containment security boundary) and the frontmatter are unit-testable in
+// Pure helpers for authoring a Claude Code skill file. Only `path` (Node stdlib) is imported so the
+// slug sanitization (a path-containment security boundary) and the frontmatter stay unit-testable in
 // plain Node — same pattern as parse.ts / diff.ts.
+import * as path from "path";
 
 // A filesystem-safe, lowercase slug. Collapsing everything outside [a-z0-9] to single dashes means
 // the result can never contain a path separator or "..", so it can't escape the skills directory.
@@ -12,6 +13,19 @@ export function skillSlug(name: string): string {
     .replace(/^-+|-+$/g, "")
     .slice(0, 64)
     .replace(/-+$/g, "");
+}
+
+// Resolve a skill's directory + SKILL.md path under `root`, or null if the name yields no usable slug
+// or (defense-in-depth) the resolved path would escape `root`. This is THE write/delete boundary —
+// create/edit/delete all go through it so the slug sanitization + containment check live in one place.
+export function safeSkillDir(root: string, name: string): { slug: string; dir: string; file: string } | null {
+  const slug = skillSlug(name);
+  if (!slug) return null;
+  const base = path.resolve(root);
+  const dir = path.resolve(base, slug);
+  if (dir !== base && !dir.startsWith(base + path.sep)) return null;
+  const file = path.join(dir, "SKILL.md");
+  return { slug, dir, file };
 }
 
 // SKILL.md contents. The model-supplied description is whitespace-flattened and quoted (with inner

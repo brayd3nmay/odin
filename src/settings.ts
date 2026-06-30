@@ -1,4 +1,6 @@
-import { App, PluginSettingTab, Setting, debounce } from "obsidian";
+import { App, PluginSettingTab, Setting, Notice, debounce } from "obsidian";
+import type { ProviderStatus } from "./agent";
+import type { SkillInfo } from "./skill";
 
 export type AgentProvider = "claude" | "codex";
 export type ThinkingLevel = "off" | "normal" | "high";
@@ -43,8 +45,6 @@ export const THINKING_LEVELS: { id: ThinkingLevel; label: string }[] = [
   { id: "normal", label: "Think" },
   { id: "high", label: "Think hard" },
 ];
-
-export const FEATURE_KEYS: FeatureKey[] = ["fixFormatting", "refine", "findGaps", "chat"];
 
 const PROVIDER_FEATURE_DEFAULTS: Record<AgentProvider, Record<FeatureKey, Omit<FeatureConfig, "provider">>> = {
   claude: {
@@ -146,6 +146,9 @@ interface PluginLike {
   settings: OdinSettings;
   saveSettings(): Promise<void>;
   availableProviders(): AgentProvider[];
+  checkProvider(provider: AgentProvider): Promise<ProviderStatus>;
+  listSkills(): SkillInfo[];
+  removeSkill(slug: string): boolean;
 }
 
 export class OdinSettingTab extends PluginSettingTab {
@@ -203,6 +206,13 @@ export class OdinSettingTab extends PluginSettingTab {
         t.inputEl.style.width = "100%";
       });
 
+    new Setting(containerEl).setName("Connections").setHeading();
+    this.connectionRow("claude", "Leave the path blank to auto-detect your installed `claude`.");
+    this.connectionRow("codex", "Uses your ChatGPT login by default. Leave the path blank to auto-detect `codex`.");
+
+    new Setting(containerEl).setName("Skills").setHeading();
+    this.renderSkills(containerEl);
+
     new Setting(containerEl).setName("Other").setHeading();
     new Setting(containerEl)
       .setName("Allow web search")
@@ -213,23 +223,72 @@ export class OdinSettingTab extends PluginSettingTab {
           await this.plugin.saveSettings();
         }),
       );
-    new Setting(containerEl)
-      .setName("Claude executable path (optional)")
-      .setDesc("Leave blank to auto-detect your installed `claude`.")
-      .addText((t) =>
-        t.setValue(this.plugin.settings.claudePath).onChange(async (v) => {
-          this.plugin.settings.claudePath = v.trim();
-          await this.plugin.saveSettings();
+  }
+
+  // Per-provider connection row: an optional CLI path plus a "Test connection" button that runs a
+  // zero-token status check (CLI version + the CLI's own auth-status command) and shows the result.
+  private connectionRow(provider: AgentProvider, hint: string) {
+    const label = providerLabel(provider);
+    const pathKey: "claudePath" | "codexPath" = provider === "claude" ? "claudePath" : "codexPath";
+    // Debounced like the style-guide field: each save rewrites the whole data file (settings + all
+    // threads) AND re-resolves both CLIs, so don't do it on every keystroke of a path.
+    const save = debounce(() => this.plugin.saveSettings(), 500, true);
+    const setting = new Setting(this.containerEl).setName(label).setDesc(hint);
+    setting.addText((t) =>
+      t
+        .setPlaceholder("Path to CLI (optional)")
+        .setValue(this.plugin.settings[pathKey])
+        .onChange((v) => {
+          this.plugin.settings[pathKey] = v.trim();
+          save();
         }),
-      );
-    new Setting(containerEl)
-      .setName("Codex executable path (optional)")
-      .setDesc("Leave blank to auto-detect your installed `codex`. Codex uses your ChatGPT login by default.")
-      .addText((t) =>
-        t.setValue(this.plugin.settings.codexPath).onChange(async (v) => {
-          this.plugin.settings.codexPath = v.trim();
-          await this.plugin.saveSettings();
-        }),
-      );
+    );
+    setting.addButton((b) =>
+      b.setButtonText("Test connection").onClick(async () => {
+        b.setButtonText("Checking…").setDisabled(true);
+        try {
+          await this.plugin.saveSettings(); // apply a just-typed path before probing
+          const status = await this.plugin.checkProvider(provider);
+          const msg = this.statusText(status);
+          setting.setDesc(msg);
+          new Notice(`${label}: ${msg}`);
+        } finally {
+          b.setButtonText("Test connection").setDisabled(false);
+        }
+      }),
+    );
+  }
+
+  private statusText(s: ProviderStatus): string {
+    if (!s.path) return s.hint ?? "Not found.";
+    const ver = s.version ? ` (${s.version})` : "";
+    if (s.authed) return `✓ Connected — ${s.detail}${ver}`;
+    return `${s.detail}${ver}. ${s.hint ?? ""}`.trim();
+  }
+
+  // Read-only list of Odin's saved skills with a delete control — the only place to see/manage them
+  // outside the chat "/" menu. Creation/editing stays in chat.
+  private renderSkills(containerEl: HTMLElement) {
+    const skills = this.plugin.listSkills();
+    if (!skills.length) {
+      new Setting(containerEl).setDesc('No saved skills yet. In chat, ask Odin to "save this as a skill".');
+      return;
+    }
+    for (const s of skills) {
+      new Setting(containerEl)
+        .setName(s.name)
+        .setDesc(s.description || `Run with /${s.slug}`)
+        .addExtraButton((b) =>
+          b
+            .setIcon("trash-2")
+            .setTooltip("Delete skill")
+            .onClick(() => {
+              if (this.plugin.removeSkill(s.slug)) {
+                new Notice(`Deleted skill "${s.slug}".`);
+                this.display();
+              }
+            }),
+        );
+    }
   }
 }
