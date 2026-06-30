@@ -69,6 +69,7 @@ class Thinking {
   private live: LiveNode | null = null;
   private start = Date.now();
   private done = false;
+  private hasContent = false;
 
   constructor(parent: HTMLElement, private scroll: () => void) {
     // Expanded by default: the timeline is visible inline. The head still toggles a whole-block collapse.
@@ -110,6 +111,7 @@ class Thinking {
       detail = body.createDiv({ cls: "odin-tl-detail" });
     }
     this.live = { el: node, ic, kind, detail, text: "" };
+    this.hasContent = true;
     this.setHead(kind === "think" ? "Thinking…" : label);
     this.scroll();
     return body;
@@ -145,6 +147,8 @@ class Thinking {
     if (this.done) return;
     this.done = true;
     this.markLastDone();
+    // A block that never produced a node is noise — drop it instead of leaving a bare "Thought for 0s".
+    if (!this.hasContent) { this.el.remove(); return; }
     const secs = ((Date.now() - this.start) / 1000).toFixed(1);
     this.setHead(`Thought for ${secs}s`);
     this.peek.empty();
@@ -165,8 +169,12 @@ class Transcript {
   private closeReply() { if (this.reply) { this.reply.done(); this.reply = null; } }
 
   thinking(delta: string) { this.closeReply(); (this.think ??= this.mkThink()).reasoning(delta); }
-  tool(name: string) { this.closeReply(); (this.think ??= this.mkThink()).tool(name); }
-  text(delta: string) { this.closeThink(); (this.reply ??= this.mkReply()).append(delta); }
+  // Skip tools that render no node (ask_user/propose_note_edit — surfaced via break()-driven UI), so
+  // they don't spawn an empty "Thinking" block.
+  tool(name: string) { if (!stepInfo(name)) return; this.closeReply(); (this.think ??= this.mkThink()).tool(name); }
+  // Whitespace-only deltas before any real reply must not close the live thinking block or open an
+  // empty bubble — that's what splits one thinking pass into two stacked blocks.
+  text(delta: string) { if (!this.reply && !delta.trim()) return; this.closeThink(); (this.reply ??= this.mkReply()).append(delta); }
   // Close open blocks so the next thing (an ask box, an edit popup, more output) starts below them.
   break() { this.closeThink(); this.closeReply(); }
   finish(full: string) {
