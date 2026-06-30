@@ -1,7 +1,7 @@
 import { Plugin, FileSystemAdapter, MarkdownView } from "obsidian";
-import { OdinSettings, DEFAULT_SETTINGS, OdinSettingTab } from "./settings";
+import { OdinSettings, OdinSettingTab, normalizeSettings } from "./settings";
 import { ChatThread } from "./history";
-import { AgentClient, resolveClaudePath } from "./agent";
+import { AgentClient, resolveClaudePath, resolveCodexPath } from "./agent";
 import { FloatingWidget } from "./widget";
 import { odinDiffField } from "./editor-diff";
 
@@ -20,13 +20,11 @@ export default class OdinPlugin extends Plugin {
     await this.loadAll();
     this.addSettingTab(new OdinSettingTab(this.app, this));
 
-    const basePath = (this.app.vault.adapter as FileSystemAdapter).getBasePath();
-    this.agent = new AgentClient({
-      cwd: basePath,
-      claudePath: resolveClaudePath(this.settings.claudePath),
-    });
+    this.refreshAgent();
     this.widget = new FloatingWidget(this);
 
+    // Renders the in-editor inline diff preview (red deletions / green additions) when the agent
+    // proposes an edit. Decorations only; the document is untouched until the user accepts.
     this.registerEditorExtension(odinDiffField);
 
     this.addCommand({
@@ -71,11 +69,22 @@ export default class OdinPlugin extends Plugin {
 
   async loadAll() {
     const data = (await this.loadData()) as OdinData | null;
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, data?.settings);
+    this.settings = normalizeSettings(data?.settings);
     this.threads = data?.threads ?? [];
+  }
+
+  refreshAgent() {
+    const basePath = (this.app.vault.adapter as FileSystemAdapter).getBasePath();
+    this.agent = new AgentClient({
+      cwd: basePath,
+      provider: this.settings.provider,
+      claudePath: resolveClaudePath(this.settings.claudePath),
+      codexPath: resolveCodexPath(this.settings.codexPath),
+    });
   }
 
   async saveSettings() {
     await this.saveData({ settings: this.settings, threads: this.threads } as OdinData);
+    this.refreshAgent();
   }
 }

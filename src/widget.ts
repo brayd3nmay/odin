@@ -6,7 +6,7 @@ import { showDiff, hideDiff } from "./editor-diff";
 import { planDiff } from "./diffplan";
 import { PROMPTS, StreamHooks, EditResult } from "./agent";
 import { newThread, addMessage, ChatThread } from "./history";
-import { MODELS, THINKING_LEVELS, FeatureConfig, ThinkingLevel } from "./settings";
+import { THINKING_LEVELS, FeatureConfig, ThinkingLevel, modelsForProvider, providerLabel } from "./settings";
 import { SkillInfo } from "./skill";
 import { CLAUDE_SPARK } from "./icons";
 
@@ -20,6 +20,7 @@ const STEPS: Record<string, { icon: string; label: string; spin?: boolean }> = {
   Grep: { icon: "search", label: "Searching your vault" },
   WebSearch: { icon: "globe", label: "Searching the web", spin: true },
   WebFetch: { icon: "globe", label: "Reading a web page", spin: true },
+  Shell: { icon: "terminal", label: "Inspecting your vault" },
   // the chat agent's own self-editing tools, surfaced as timeline nodes:
   update_style_guide: { icon: "pencil", label: "Updating your style guide" },
   create_skill: { icon: "puzzle", label: "Creating a skill" },
@@ -262,7 +263,7 @@ export class FloatingWidget {
     });
     const bar = this.field.createDiv({ cls: "odin-inbar" });
     this.modelSel = this.ghostSelect(bar, (ev) =>
-      this.pickerMenu(ev, MODELS, this.plugin.settings.chat.model, (id) => { this.plugin.settings.chat.model = id; }));
+      this.pickerMenu(ev, modelsForProvider(this.plugin.settings.provider), this.plugin.settings.chat.model, (id) => { this.plugin.settings.chat.model = id; }));
     this.thinkSel = this.ghostSelect(bar, (ev) =>
       this.pickerMenu(ev, THINKING_LEVELS, this.plugin.settings.chat.thinking, (id) => { this.plugin.settings.chat.thinking = id as ThinkingLevel; }));
     bar.createDiv({ cls: "odin-spacer" });
@@ -385,9 +386,9 @@ export class FloatingWidget {
 
   private refreshSelectors() {
     const cfg = this.plugin.settings.chat;
-    const model = MODELS.find((m) => m.id === cfg.model)?.label ?? cfg.model;
+    const model = modelsForProvider(this.plugin.settings.provider).find((m) => m.id === cfg.model)?.label ?? cfg.model;
     const think = THINKING_LEVELS.find((t) => t.id === cfg.thinking)?.label ?? cfg.thinking;
-    this.modelSel.setText(model);
+    this.modelSel.setText(`${providerLabel(this.plugin.settings.provider)}: ${model}`);
     setIcon(this.modelSel.createSpan({ cls: "odin-car" }), "chevron-down");
     this.thinkSel.setText(think);
     setIcon(this.thinkSel.createSpan({ cls: "odin-car" }), "chevron-down");
