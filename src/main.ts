@@ -27,8 +27,6 @@ export default class OdinPlugin extends Plugin {
     });
     this.widget = new FloatingWidget(this);
 
-    // Renders the in-editor inline diff preview (red deletions / green additions) when Claude
-    // proposes an edit. Decorations only; the document is untouched until the user accepts.
     this.registerEditorExtension(odinDiffField);
 
     this.addCommand({

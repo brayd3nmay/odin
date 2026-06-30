@@ -109,8 +109,8 @@ function builtinTools(allowWeb: boolean): string[] {
 export class AgentClient {
   constructor(private cfg: { cwd: string; claudePath?: string }) {}
 
-  // One-shot transform: no tools, plain string prompt. Used by Fix Formatting & Refine.
-  // `hooks` optionally surfaces live thinking while it works (the result is shown as a diff, not typed).
+  // One-shot transform used by Fix Formatting & Refine; the result is shown as a diff, not typed.
+  // `hooks` optionally surfaces live thinking while it works.
   async transform(systemPrompt: string, text: string, o: RunOpts, hooks?: StreamHooks): Promise<string> {
     const messages: any[] = [];
     for await (const m of query({
@@ -128,8 +128,7 @@ export class AgentClient {
       messages.push(m);
       if (hooks) this.handleStream(m, hooks);
     }
-    // Restore the original edges: Fix/Refine shouldn't alter leading/trailing whitespace, but the
-    // model drops it on rewrite, producing a phantom blank-line diff that steering can't undo.
+    // Restore edges the model drops on rewrite (see preserveEdges).
     return preserveEdges(text, stripFences(extractText(messages)));
   }
 
