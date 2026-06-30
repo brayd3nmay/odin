@@ -1,10 +1,11 @@
 import { query, tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { execSync } from "child_process";
-import { existsSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "fs";
 import * as os from "os";
 import * as path from "path";
-import { extractText, stripFences } from "./parse";
+import { extractText, stripFences, preserveEdges } from "./parse";
+import { skillSlug, skillDoc, parseSkill, SkillInfo } from "./skill";
 import { thinkingTokens, ThinkingLevel } from "./settings";
 
 export const PROMPTS = {
@@ -31,7 +32,22 @@ export const PROMPTS = {
     "is open — read that file for context and treat it as the note to edit; do NOT guess from recently " +
     "modified files. You may read other notes in the vault and search the web. You can only edit the currently " +
     "open note, and only via the propose_note_edit tool (the user reviews a diff and approves). Never attempt " +
-    "to edit other files. If you need clarification, call ask_user. Be concise.",
+    "to edit other files. propose_note_edit is ONLY for the note's actual new content — never put a question, " +
+    "clarification, or message to the user in it. If the request is ambiguous (e.g. you don't know which part " +
+    "to change), do NOT call propose_note_edit: ask via ask_user or just reply in plain text. After the user " +
+    "accepts, rejects, or steers a proposed edit, reply with a brief one-line confirmation of the outcome and " +
+    "stop — NEVER say the user's message was empty or 'didn't come through' (the user is present; they just " +
+    "acted on an edit). Be concise. " +
+    "Your replies are shown to the user as rendered Markdown, so write Markdown directly — use headings, " +
+    "lists, bold/italics, and inline code where they help. Do NOT wrap your whole reply in a code fence; " +
+    "reserve fenced code blocks for actual code, or for when the user explicitly asks to see raw Markdown source." +
+    "\n\nYou also have two tools for evolving how you work — but use them ONLY when the user EXPLICITLY asks " +
+    "you to, never proactively or to be helpful: update_style_guide appends ONE concise formatting preference " +
+    "to the user's Refine style guide (use it when they tell you how they like notes formatted and ask you to " +
+    "remember it — it is appended, never overwriting); create_skill saves a reusable workflow as a skill file " +
+    "(use it when they ask you to save or remember a workflow). The user approves each with a confirmation, so " +
+    "only call them on a direct request like \"remember that…\" or \"save this as a skill\". A newly created skill " +
+    "is immediately runnable by the user typing /<name> in the composer.",
 };
 
 // Resolve the user's installed `claude`. Returns undefined to let the SDK use its bundled binary.
@@ -83,9 +99,17 @@ export interface StreamHooks {
   onTool?(name: string): void;
 }
 
+// Outcome of a proposed edit: accepted/rejected, or rejected-with-steer (feedback the agent should
+// use to revise and re-propose, all within the same turn).
+export type EditResult = { accepted: boolean; feedback?: string };
+
 export interface AgentUI extends StreamHooks {
   onAskUser(q: string): Promise<string>;
-  onProposeEdit?(content: string, summary: string): Promise<boolean>;
+  onProposeEdit?(content: string, summary: string): Promise<EditResult>;
+  // Self-editing tools (chat only). Each resolves whether the user approved the inline confirmation.
+  // The style guide is persisted by the UI; the skill file is written here only after approval.
+  onUpdateStyleGuide?(preference: string): Promise<boolean>;
+  onCreateSkill?(slug: string, summary: string): Promise<boolean>;
 }
 
 // ponytail: parent_tool_use_id is required (string | null) in SDKUserMessage; brief omitted it.
@@ -107,8 +131,27 @@ function builtinTools(allowWeb: boolean): string[] {
 export class AgentClient {
   constructor(private cfg: { cwd: string; claudePath?: string }) {}
 
-  // One-shot transform: no tools, plain string prompt. Used by Fix Formatting & Refine.
-  // `hooks` optionally surfaces live thinking while it works (the result is shown as a diff, not typed).
+  // The skills authored in this vault (<cwd>/.claude/skills/<slug>/SKILL.md), surfaced in the widget's
+  // "/" menu so the user can run them directly. Sync + cheap (a handful of small files).
+  listSkills(): SkillInfo[] {
+    const dir = path.join(this.cfg.cwd, ".claude", "skills");
+    if (!existsSync(dir)) return [];
+    const out: SkillInfo[] = [];
+    for (const slug of readdirSync(dir)) {
+      const file = path.join(dir, slug, "SKILL.md");
+      if (!existsSync(file)) continue;
+      try {
+        const p = parseSkill(readFileSync(file, "utf8"));
+        out.push({ slug, name: p.name || slug, description: p.description, body: p.body });
+      } catch {
+        /* skip an unreadable skill */
+      }
+    }
+    return out.sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  // One-shot transform used by Fix Formatting & Refine; the result is shown as a diff, not typed.
+  // `hooks` optionally surfaces live thinking while it works.
   async transform(systemPrompt: string, text: string, o: RunOpts, hooks?: StreamHooks): Promise<string> {
     const messages: any[] = [];
     for await (const m of query({
@@ -126,7 +169,8 @@ export class AgentClient {
       messages.push(m);
       if (hooks) this.handleStream(m, hooks);
     }
-    return stripFences(extractText(messages));
+    // Restore edges the model drops on rewrite (see preserveEdges).
+    return preserveEdges(text, stripFences(extractText(messages)));
   }
 
   // Read-only vault + optional web + ask_user. Used by Find Gaps.
@@ -169,10 +213,14 @@ export class AgentClient {
     // ponytail: any[] avoids the generic mismatch between SdkMcpToolDefinition<{question}> and SdkMcpToolDefinition<{new_content,summary}>
     const tools: any[] = [this.askUserTool(ui)];
     if (ui.onProposeEdit) tools.push(this.proposeEditTool(ui));
+    if (ui.onUpdateStyleGuide) tools.push(this.updateStyleGuideTool(ui));
+    if (ui.onCreateSkill) tools.push(this.createSkillTool(ui));
     const odin = createSdkMcpServer({ name: "odin", version: "1.0.0", tools });
     const builtins = builtinTools(o.allowWeb);
     const allowed = [...builtins, "mcp__odin__ask_user"];
     if (ui.onProposeEdit) allowed.push("mcp__odin__propose_note_edit");
+    if (ui.onUpdateStyleGuide) allowed.push("mcp__odin__update_style_guide");
+    if (ui.onCreateSkill) allowed.push("mcp__odin__create_skill");
 
     const messages: any[] = [];
     let sessionId = resumeSessionId ?? "";
@@ -186,6 +234,12 @@ export class AgentClient {
         mcpServers: { odin },
         allowedTools: allowed,
         resume: resumeSessionId,
+        // Scope settings to the project so the user's GLOBAL Claude Code config/hooks don't bleed into
+        // the Obsidian assistant. skills:[] disables the SDK's own skill auto-loading (which only found
+        // global skills, not the vault's) — the user's authored skills are invoked directly via the
+        // "/" menu (see widget.listSkills / invokeSkill) for immediate, reliable use.
+        settingSources: ["project"],
+        skills: [],
         pathToClaudeCodeExecutable: this.cfg.claudePath,
         abortController: o.abort,
         includePartialMessages: true,
@@ -230,24 +284,76 @@ export class AgentClient {
   private proposeEditTool(ui: AgentUI) {
     return tool(
       "propose_note_edit",
-      "Propose new full content for the currently open note. The user reviews a diff and accepts or rejects.",
+      "Propose new full content for the currently open note. The user reviews a diff and accepts or rejects. " +
+        "new_content must be ONLY the note's actual text — never a question, clarification, or message to the " +
+        "user. If you don't yet know what to edit, don't call this tool; ask via ask_user or reply in plain text.",
       {
-        new_content: z.string().describe("The complete new note content"),
+        new_content: z.string().describe("The complete new note content — note text only, never a message to the user"),
         summary: z.string().describe("One-line summary of the change"),
       },
       async (args) => {
-        const accepted = await ui.onProposeEdit!(args.new_content, args.summary);
+        const r = await ui.onProposeEdit!(args.new_content, args.summary);
+        const text = (t: string) => ({ content: [{ type: "text" as const, text: t }] });
+        if (r.accepted) return text("User accepted; the note was updated. Confirm what changed in one short line, then stop.");
+        if (r.feedback) {
+          return text(
+            `User did NOT accept this version — they want changes: ${r.feedback}\n` +
+              "Revise the note accordingly and call propose_note_edit again with the complete updated content.",
+          );
+        }
+        return text("User rejected; the note is unchanged. Briefly acknowledge, then stop.");
+      },
+    );
+  }
+
+  // Append one formatting preference to the user's Refine style guide. The UI confirms + persists;
+  // this tool only forwards the request and reports the outcome.
+  private updateStyleGuideTool(ui: AgentUI) {
+    return tool(
+      "update_style_guide",
+      "Append ONE concise formatting preference to the user's Refine style guide. Use ONLY when the user " +
+        "explicitly asks you to remember how they like notes formatted. It is appended, never overwriting; the " +
+        "user approves before it is saved.",
+      { preference: z.string().describe("One concise formatting preference to remember (a single sentence)") },
+      async (args) => {
+        const ok = await ui.onUpdateStyleGuide!(args.preference.trim());
         return {
-          content: [
-            {
-              type: "text" as const,
-              text: accepted
-                ? "User accepted; the note was updated."
-                : "User rejected; the note is unchanged.",
-            },
-          ],
+          content: [{ type: "text" as const, text: ok ? "Saved to your style guide." : "User declined; style guide unchanged." }],
         };
       },
+      { annotations: { readOnlyHint: false } },
+    );
+  }
+
+  // Author a Claude Code skill at <vault>/.claude/skills/<slug>/SKILL.md. Safety lives in code, not a
+  // dialog: slug sanitization, path containment under the skills dir, and no-overwrite. The file is
+  // only written after the user approves the inline confirmation (ui.onCreateSkill).
+  private createSkillTool(ui: AgentUI) {
+    return tool(
+      "create_skill",
+      "Author a reusable skill at .claude/skills/<name>/SKILL.md so it is available in the user's NEXT chat. " +
+        "Use ONLY when the user explicitly asks you to save or remember a workflow. Does not overwrite an existing skill.",
+      {
+        name: z.string().describe("Short skill name; becomes the directory slug"),
+        description: z.string().describe("One-line description of when to use the skill"),
+        instructions: z.string().describe("The skill body in Markdown — what to do when it runs"),
+      },
+      async (args) => {
+        const text = (t: string) => ({ content: [{ type: "text" as const, text: t }] });
+        const slug = skillSlug(args.name);
+        if (!slug) return text("Invalid skill name.");
+        const root = path.resolve(this.cfg.cwd, ".claude", "skills");
+        const dir = path.join(root, slug);
+        if (!path.resolve(dir).startsWith(root + path.sep)) return text("Refused: unsafe skill path.");
+        const file = path.join(dir, "SKILL.md");
+        if (existsSync(file)) return text(`A skill named "${slug}" already exists; not overwriting.`);
+        const ok = await ui.onCreateSkill!(slug, args.description.trim());
+        if (!ok) return text("User declined; no skill was created.");
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(file, skillDoc(slug, args.description, args.instructions), "utf8");
+        return text(`Created skill "${slug}". The user can run it anytime by typing /${slug} in the composer.`);
+      },
+      { annotations: { readOnlyHint: false } },
     );
   }
 }

@@ -2,70 +2,117 @@
    design tokens (--radius-*, --icon-*, theme colors, clickable-icon) so it reads as part of the
    app. The only non-Obsidian accents (per-action hover colors, diff red/green) are intentional. */
 
+/* One size & type scale, scoped to the card, layered on Obsidian's own tokens. Every rule below
+   references intent (sm/base/lg) instead of a one-off px, so sizing stays consistent. */
+.odin-card,
+.odin-bubble {
+  --odin-fs-xs: 11px;
+  --odin-fs-sm: 12px;
+  --odin-fs-base: 13px;
+  --odin-fs-lg: 14px;
+  --odin-icon-sm: 14px;
+  --odin-icon-base: var(--icon-s, 16px);
+  --odin-icon-lg: 20px;
+  --odin-gap-xs: 4px;
+  --odin-gap-sm: 8px;
+  --odin-gap-md: 12px;
+}
+
 .odin-root { position: fixed; right: 20px; bottom: 40px; z-index: var(--layer-popover); }
 .odin-ic { display: inline-block; vertical-align: -0.14em; }
 
 /* collapsed launcher — a rounded square, like an Obsidian ribbon/action button */
 .odin-bubble {
+  appearance: none; padding: 0;
   width: 40px; height: 40px; border-radius: var(--radius-m, 8px);
-  display: flex; align-items: center; justify-content: center; font-size: 22px;
+  display: flex; align-items: center; justify-content: center; font-size: var(--odin-icon-lg);
   background: var(--background-primary); color: var(--text-muted);
   border: 1px solid var(--background-modifier-border);
   box-shadow: var(--shadow-s); cursor: pointer;
+  transition: color 0.15s, background 0.15s, transform 0.08s ease;
 }
 .odin-bubble:hover { color: var(--interactive-accent); background: var(--background-modifier-hover); }
+.odin-bubble:active { transform: scale(0.94); }
 .odin-bubble.is-hidden { display: none; }
 
 /* card */
 .odin-card {
-  --c-fix: #2d7ff9; --c-refine: var(--interactive-accent); --c-gaps: #e8930c;
   display: none; flex-direction: column;
   width: 384px; height: 540px; max-height: 80vh;
   background: var(--background-primary);
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--radius-l, 12px); box-shadow: var(--shadow-l); overflow: hidden;
-  font-size: 13.5px;
+  font-size: var(--odin-fs-base);
 }
-.odin-card.is-open { display: flex; }
+.odin-card.is-open { display: flex; transform-origin: bottom right; animation: odin-card-in 0.18s cubic-bezier(0.16, 1, 0.3, 1); }
 .odin-card.is-expanded { width: 560px; height: 720px; }
 .odin-spacer { flex: 1; }
 
 /* header — titled panel header with a hairline, like an Obsidian view header */
-.odin-header { display: flex; align-items: center; gap: 4px; padding: 8px 8px 8px 12px; border-bottom: 1px solid var(--background-modifier-border); }
-.odin-title { display: flex; align-items: center; gap: 8px; font-weight: 600; letter-spacing: -0.01em; font-size: 14px; }
-.odin-title-spark { font-size: 17px; display: inline-flex; color: var(--text-normal); }
-.odin-iconbtn { --icon-size: var(--icon-s, 16px); color: var(--text-muted); }
+.odin-header { display: flex; align-items: center; gap: var(--odin-gap-xs); padding: 8px 8px 8px 12px; border-bottom: 1px solid var(--background-modifier-border); }
+.odin-title { display: flex; align-items: center; gap: var(--odin-gap-sm); font-weight: 600; letter-spacing: -0.01em; font-size: var(--odin-fs-lg); }
+.odin-title-spark { font-size: var(--odin-icon-base); display: inline-flex; color: var(--text-normal); }
+.odin-iconbtn { --icon-size: var(--odin-icon-base); color: var(--text-muted); }
 .odin-iconbtn:hover { color: var(--text-normal); }
 .odin-divider { width: 1px; height: 16px; background: var(--background-modifier-border); margin: 0 4px; }
 
 /* stream */
-.odin-stream { flex: 1; overflow-y: auto; padding: 12px 14px 8px; display: flex; flex-direction: column; gap: 12px; }
+.odin-stream { flex: 1; overflow-y: auto; padding: 12px 14px 8px; display: flex; flex-direction: column; gap: var(--odin-gap-md); }
 .odin-msg { line-height: 1.55; }
+/* every new message + thinking block rises in (transform/opacity only) */
+.odin-msg, .odin-think { animation: odin-rise 0.22s ease both; }
 
-/* thinking */
-.odin-spinner {
-  width: 14px; height: 14px; flex: 0 0 auto; box-sizing: border-box;
-  border: 2px solid var(--background-modifier-border); border-top-color: var(--interactive-accent);
-  border-radius: 50%; animation: odin-spin 0.7s linear infinite; display: inline-block;
-}
-.odin-spinner-sm { width: 11px; height: 11px; }
-@keyframes odin-spin { to { transform: rotate(360deg); } }
-.odin-think-head { display: flex; align-items: center; gap: 7px; color: var(--text-muted); font-size: 13px; cursor: pointer; user-select: none; }
+/* first-run / empty state — centered spark + a one-liner that surfaces /commands */
+.odin-empty { margin: auto; display: flex; flex-direction: column; align-items: center; gap: 10px; color: var(--text-muted); text-align: center; padding: 24px; }
+.odin-empty-spark { font-size: 30px; color: var(--text-faint); display: inline-flex; }
+
+/* thinking — a single vertical TIMELINE that interleaves reasoning + tool steps, each a node with
+   an icon joined by hairline connectors. Collapsed: an animated head + a one-line peek of the live
+   reasoning. Expanded: the full timeline. Collapses to "Thought for Ns". */
+.odin-think-head { display: flex; align-items: center; gap: var(--odin-gap-sm); color: var(--text-muted); font-size: var(--odin-fs-base); cursor: pointer; user-select: none; }
 .odin-think-head:hover { color: var(--text-normal); }
 .odin-think-label { font-weight: 500; }
-/* chevron-right by default (collapsed ▸); rotates to point down (▾) when expanded */
-.odin-chev { --icon-size: 16px; color: var(--text-faint); display: inline-flex; transition: transform 0.12s ease; }
+/* live head: the label shimmers (a soft gradient sweep) instead of the old opacity flash */
+.odin-think-head.is-live .odin-think-label {
+  background: linear-gradient(100deg, var(--text-muted) 35%, var(--text-normal) 50%, var(--text-muted) 65%);
+  background-size: 200% 100%; -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent; color: transparent; animation: odin-shimmer 2.4s linear infinite;
+}
+.odin-think-ic { --icon-size: var(--odin-icon-base); display: inline-flex; color: var(--text-muted); }
+.odin-think-ic.is-live { color: var(--interactive-accent); }
+.odin-think-ic.is-spin { animation: odin-spin 1.1s linear infinite; }
+.odin-chev { --icon-size: var(--odin-icon-base); color: var(--text-faint); display: inline-flex; transition: transform 0.12s ease; }
 .odin-think:not(.is-collapsed) .odin-chev { transform: rotate(90deg); }
-.odin-think.is-collapsed .odin-steps,
-.odin-think.is-collapsed .odin-think-reason { display: none; }
-.odin-steps { display: flex; flex-direction: column; gap: 7px; margin: 7px 0 0; padding: 2px 0 2px 10px; border-left: 2px solid var(--background-modifier-border); }
-.odin-steps:empty { display: none; }
-.odin-step { display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 12.5px; }
-.odin-step.is-live { color: var(--text-normal); }
-.odin-step-ic { --icon-size: var(--icon-xs, 14px); width: 14px; display: inline-flex; align-items: center; justify-content: center; }
-.odin-step:not(.is-live) .odin-step-ic { color: var(--text-success); }
-.odin-think-reason { display: none; white-space: pre-wrap; color: var(--text-muted); font-size: 12.5px; margin-top: 8px; padding-left: 10px; border-left: 2px solid var(--background-modifier-border); }
-.odin-think-reason.is-shown { display: block; }
+/* peek: the tail of the live reasoning, clipped to ~2 lines and scroll-pinned to the newest text */
+.odin-think-peek { margin: 4px 0 0 24px; max-height: 2.7em; overflow: hidden; color: var(--text-faint); font-size: var(--odin-fs-sm); line-height: 1.35; white-space: pre-wrap; word-break: break-word; }
+.odin-think-peek:empty, .odin-think:not(.is-collapsed) .odin-think-peek { display: none; }
+.odin-think.is-collapsed .odin-timeline { display: none; }
+
+.odin-timeline { display: flex; flex-direction: column; margin: 6px 0 0; }
+.odin-timeline:empty { display: none; }
+.odin-tl-node { position: relative; display: flex; gap: var(--odin-gap-sm); padding: 5px 0; animation: odin-node-in 0.2s ease both; }
+/* per-node hairline behind the icon column; the icon's own background masks it into segments */
+.odin-tl-node::before { content: ""; position: absolute; left: 7px; top: 0; bottom: 0; width: 1.5px; background: var(--background-modifier-border); }
+.odin-tl-node:first-child::before { top: 13px; }
+.odin-tl-node:last-child::before { bottom: calc(100% - 13px); }
+.odin-tl-ic { position: relative; z-index: 1; flex: 0 0 16px; width: 16px; height: 16px; --icon-size: var(--odin-icon-sm); display: inline-flex; align-items: center; justify-content: center; background: var(--background-primary); color: var(--text-muted); }
+.odin-tl-ic.is-spin { animation: odin-spin 1.1s linear infinite; }
+/* a finished tool just dims to muted (no checkmark); the live tool is accent */
+.odin-tl-node.is-live.is-tool .odin-tl-ic { color: var(--interactive-accent); }
+/* reasoning nodes use a small dot that "breathes" while live */
+.odin-tl-dot::after { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--text-faint); }
+.odin-tl-node.is-live .odin-tl-dot::after { background: var(--interactive-accent); animation: odin-breathe 1.4s ease-in-out infinite; }
+.odin-tl-body { min-width: 0; flex: 1; }
+.odin-tl-label { display: flex; align-items: center; gap: var(--odin-gap-xs); color: var(--text-muted); font-size: var(--odin-fs-sm); line-height: 1.3; }
+.odin-tl-node.is-think .odin-tl-label { cursor: pointer; }
+.odin-tl-node.is-think .odin-tl-label:hover { color: var(--text-normal); }
+.odin-tl-node.is-live .odin-tl-label { color: var(--text-normal); }
+.odin-tl-chev { --icon-size: 13px; color: var(--text-faint); display: inline-flex; transition: transform 0.12s ease; }
+.odin-tl-node.is-open .odin-tl-chev { transform: rotate(90deg); }
+/* per-node reasoning detail: hidden until the node is expanded (the live node is open) */
+.odin-tl-detail { display: none; margin-top: 3px; max-height: 8em; overflow-y: auto; color: var(--text-faint); font-size: var(--odin-fs-sm); line-height: 1.4; white-space: pre-wrap; word-break: break-word; }
+.odin-tl-node.is-open .odin-tl-detail { display: block; }
+.odin-tl-detail:empty { display: none; }
 
 /* messages */
 .odin-user {
@@ -73,88 +120,150 @@
   background: color-mix(in srgb, var(--interactive-accent) 12%, var(--background-primary));
   color: var(--text-normal); padding: 6px 11px; border-radius: var(--radius-m, 8px);
 }
-.odin-assistant { max-width: 100%; white-space: pre-wrap; color: var(--text-normal); }
+/* slash-command echo: a user bubble, but monospaced so it reads as an invoked command */
+.odin-cmd { font-family: var(--font-monospace); font-size: var(--odin-fs-sm); }
+.odin-assistant { max-width: 100%; color: var(--text-normal); }
+/* The reply is rendered as Markdown (block elements) on every delta, so the container must NOT use
+   white-space: pre-wrap — that would turn the whitespace between rendered blocks into visible blank
+   lines mid-stream, which then collapse when is-streaming is removed (a jarring reflow at the end). */
+/* rendered Markdown: trim the outer block margins so the bubble doesn't gain dead space, keep inner rhythm */
+.odin-assistant > :first-child { margin-top: 0; }
+.odin-assistant > :last-child { margin-bottom: 0; }
+.odin-assistant p { margin: 0 0 0.5em; }
+.odin-assistant ul, .odin-assistant ol { margin: 0.3em 0; padding-left: 1.4em; }
+.odin-assistant pre { white-space: pre; overflow-x: auto; }
 .odin-assistant.is-streaming::after {
   content: ""; display: inline-block; width: 2px; height: 1.05em; margin-left: 2px;
-  background: var(--text-normal); vertical-align: text-bottom; animation: odin-blink 1s step-end infinite;
+  background: var(--text-normal); vertical-align: text-bottom; animation: odin-caret 1.1s ease-in-out infinite;
 }
-@keyframes odin-blink { 50% { opacity: 0; } }
+/* the native code-block copy button Obsidian injects into rendered replies runs large by default;
+   scope it down to the card's scale (this is brief #6's "copy button is too big"). */
+.odin-card .copy-code-button { font-size: var(--odin-fs-xs); padding: 2px 6px; --icon-size: var(--odin-icon-sm); }
 .odin-status { color: var(--text-muted); }
 .odin-status-ok { color: var(--text-success); }
 .odin-error { color: var(--text-error); }
+/* status line with a leading glyph (e.g. hammer for an applied edit) — muted, no green check */
+.odin-statline { display: flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: var(--odin-fs-sm); }
+.odin-statline-ic { --icon-size: var(--odin-icon-sm); display: inline-flex; flex: 0 0 auto; }
 
 /* edit actions (Accept/Reject) — live in the floating .odin-editpop */
-.odin-editacts { display: flex; gap: 8px; }
-.odin-pb { display: flex; align-items: center; gap: 7px; font-size: 12.5px; padding: 5px 11px; border-radius: var(--radius-s, 4px); border: 1px solid var(--background-modifier-border); background: var(--background-primary); color: var(--text-normal); cursor: pointer; box-shadow: none; }
+.odin-editacts { display: flex; gap: var(--odin-gap-sm); }
+.odin-pb { display: flex; align-items: center; gap: 7px; font-size: var(--odin-fs-sm); padding: 5px 11px; border-radius: var(--radius-s, 4px); border: 1px solid var(--background-modifier-border); background: var(--background-primary); color: var(--text-normal); cursor: pointer; box-shadow: none; transition: background 0.12s, transform 0.08s ease; }
 .odin-pb:hover { background: var(--background-modifier-hover); }
+.odin-pb:active { transform: scale(0.97); }
 .odin-pb.is-accept { background: var(--interactive-accent); border-color: var(--interactive-accent); color: var(--text-on-accent); }
 .odin-pb.is-accept:hover { background: var(--interactive-accent-hover); }
-.odin-pb-ic { --icon-size: 15px; display: inline-flex; }
-.odin-kbd { font-family: var(--font-monospace); font-size: 12px; padding: 1px 5px; border-radius: var(--radius-s, 4px); background: var(--background-modifier-border); }
+.odin-pb-ic { --icon-size: var(--odin-icon-base); display: inline-flex; }
+.odin-kbd { font-family: var(--font-monospace); font-size: var(--odin-fs-sm); padding: 1px 5px; border-radius: var(--radius-s, 4px); background: var(--background-modifier-border); }
 .odin-pb.is-accept .odin-kbd { background: rgba(255, 255, 255, 0.22); }
 
-/* edit-approval popup — floats just above the composer (anchored, not in the scrolling stream),
+/* edit-approval prompt — sits in flow between the stream and the input (not floating over messages),
    like a permission prompt that stays put while you review the highlighted diff */
 .odin-composer { position: relative; }
 .odin-editpop {
   display: none;
-  position: absolute; left: 8px; right: 8px; bottom: calc(100% + 4px);
+  margin: 0 10px 6px;
   padding: 11px 12px 12px;
-  background: var(--background-primary);
+  background: var(--background-secondary);
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--radius-m, 8px);
-  box-shadow: var(--shadow-l);
-  animation: odin-pop 0.16s ease;
+  box-shadow: var(--shadow-s);
+  animation: odin-pop 0.16s cubic-bezier(0.16, 1, 0.3, 1);
 }
 .odin-editpop.is-shown { display: block; }
-@keyframes odin-pop { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-.odin-editpop-head { display: flex; align-items: center; gap: 8px; }
-.odin-editpop-ic { --icon-size: 16px; color: var(--interactive-accent); display: inline-flex; }
-.odin-editpop-title { font-weight: 600; font-size: 13.5px; }
-.odin-editpop-sub { color: var(--text-muted); font-size: 12.5px; margin: 5px 0 10px; }
+.odin-editpop-head { display: flex; align-items: center; gap: var(--odin-gap-sm); }
+.odin-editpop-ic { --icon-size: var(--odin-icon-base); color: var(--interactive-accent); display: inline-flex; }
+.odin-editpop-title { font-weight: 600; font-size: var(--odin-fs-base); }
+.odin-editpop-sub { color: var(--text-muted); font-size: var(--odin-fs-sm); margin: 5px 0 10px; }
 
-/* quick actions: lightweight shortcut chips, separated from the conversation by a hairline */
-.odin-actions { display: flex; gap: 2px; padding: 8px 10px 4px; border-top: 1px solid var(--background-modifier-border); }
-.odin-qa { --c: var(--text-muted); display: flex; align-items: center; gap: 6px; padding: 5px 8px; border: none; border-radius: var(--radius-s, 4px); background: transparent; color: var(--text-muted); font-size: 12.5px; font-weight: 500; cursor: pointer; white-space: nowrap; box-shadow: none; }
-.odin-qa-ic { --icon-size: var(--icon-s, 16px); color: var(--text-faint); display: inline-flex; }
-.odin-qa:hover { background: color-mix(in srgb, var(--c) 13%, var(--background-primary)); color: var(--c); }
-.odin-qa:hover .odin-qa-ic { color: var(--c); }
-.odin-qa-fix { --c: var(--c-fix); }
-.odin-qa-refine { --c: var(--c-refine); }
-.odin-qa-gaps { --c: var(--c-gaps); }
+/* self-edit confirmation (style guide / new skill) — an inline Approve/Decline callout in the stream */
+.odin-confirm { background: var(--background-secondary); border: 1px solid var(--interactive-accent); border-radius: var(--radius-m, 8px); padding: 10px 11px; }
+.odin-confirm.is-answered { border-color: var(--background-modifier-border); }
+.odin-confirm-title { font-weight: 600; line-height: 1.45; }
+.odin-confirm-body { color: var(--text-muted); font-size: var(--odin-fs-sm); margin: 6px 0 10px; white-space: pre-wrap; word-break: break-word; }
+.odin-confirm-result { color: var(--text-muted); font-size: var(--odin-fs-sm); }
+
+/* slash-command menu — pops above the composer field while the input is "/cmd" (see updateSlash) */
+.odin-slash {
+  display: none;
+  position: absolute; left: 0; right: 0; bottom: calc(100% + 6px);
+  padding: 4px; background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m, 8px); box-shadow: var(--shadow-l);
+  transform-origin: bottom; animation: odin-pop 0.14s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.odin-slash.is-shown { display: block; }
+.odin-slash-row { display: flex; align-items: center; gap: var(--odin-gap-sm); padding: 6px 8px; border-radius: var(--radius-s, 4px); cursor: pointer; }
+.odin-slash-row.is-sel { background: var(--background-modifier-hover); }
+.odin-slash-ic { --icon-size: var(--odin-icon-base); color: var(--text-muted); display: inline-flex; }
+.odin-slash-cmd { font-family: var(--font-monospace); font-size: var(--odin-fs-sm); color: var(--text-normal); }
+.odin-slash-desc { color: var(--text-muted); font-size: var(--odin-fs-sm); margin-left: auto; }
+
+/* /help — a compact command reference printed into the stream */
+.odin-help { background: var(--background-secondary); border: 1px solid var(--background-modifier-border); border-radius: var(--radius-m, 8px); padding: 10px 12px; }
+.odin-help-title { font-weight: 600; font-size: var(--odin-fs-base); margin-bottom: 8px; }
+.odin-help-row { display: flex; align-items: center; gap: var(--odin-gap-sm); padding: 3px 0; }
+.odin-help-ic { --icon-size: var(--odin-icon-base); color: var(--text-muted); display: inline-flex; }
+.odin-help-cmd { font-family: var(--font-monospace); font-size: var(--odin-fs-sm); color: var(--text-normal); min-width: 60px; }
+.odin-help-desc { color: var(--text-muted); font-size: var(--odin-fs-sm); }
 
 /* composer: a single input box holds the textarea + an inner toolbar (model · thinking · send) */
 .odin-footer { padding: 4px 10px 10px; }
-.odin-field { display: flex; flex-direction: column; gap: 4px; background: var(--background-modifier-form-field); border: 1px solid var(--background-modifier-border); border-radius: var(--radius-m, 8px); padding: 6px 8px 6px 10px; transition: border-color 0.15s, background 0.15s; }
+.odin-field { position: relative; display: flex; flex-direction: column; gap: var(--odin-gap-xs); background: var(--background-modifier-form-field); border: 1px solid var(--background-modifier-border); border-radius: var(--radius-m, 8px); padding: 6px 8px 6px 10px; transition: border-color 0.15s, background 0.15s; }
 .odin-field.is-focus { border-color: var(--background-modifier-border-focus); }
 .odin-field.is-steer { border-color: var(--interactive-accent); background: color-mix(in srgb, var(--interactive-accent) 8%, var(--background-primary)); }
-.odin-input { width: 100%; resize: none; border: none; background: transparent; outline: none; box-shadow: none; font: inherit; font-size: 13.5px; color: var(--text-normal); padding: 4px 2px 2px; line-height: 1.35; min-height: 0; }
+.odin-input { width: 100%; resize: none; border: none; background: transparent; outline: none; box-shadow: none; font: inherit; font-size: var(--odin-fs-base); color: var(--text-normal); padding: 4px 2px 2px; line-height: 1.35; min-height: 0; }
 .odin-input:focus { box-shadow: none; }
 .odin-inbar { display: flex; align-items: center; gap: 2px; }
-.odin-ghostsel { font-size: 12px; color: var(--text-muted); background: transparent; border: none; cursor: pointer; padding: 3px 6px; border-radius: var(--radius-s, 4px); display: inline-flex; gap: 4px; align-items: center; box-shadow: none; }
+.odin-ghostsel { font-size: var(--odin-fs-sm); color: var(--text-muted); background: transparent; border: none; cursor: pointer; padding: 3px 6px; border-radius: var(--radius-s, 4px); display: inline-flex; gap: 4px; align-items: center; box-shadow: none; }
 .odin-ghostsel:hover { background: var(--background-modifier-hover); color: var(--text-normal); }
-.odin-car { --icon-size: 13px; color: var(--text-faint); display: inline-flex; }
-.odin-esc-hint { font-size: 11px; color: var(--text-faint); margin-right: 2px; }
+.odin-car { --icon-size: var(--odin-icon-sm); color: var(--text-faint); display: inline-flex; }
+.odin-esc-hint { font-size: var(--odin-fs-xs); color: var(--text-faint); margin-right: 2px; }
 /* clickable-icon (Obsidian) sizes the glyph correctly; we just set the size + accent color. */
-.odin-send { flex: 0 0 auto; --icon-size: 20px; color: var(--interactive-accent); }
+.odin-send { flex: 0 0 auto; --icon-size: var(--odin-icon-base); color: var(--interactive-accent); transition: color 0.12s, transform 0.08s ease; }
 .odin-send:hover { color: var(--interactive-accent-hover); }
+.odin-send:active { transform: scale(0.9); }
 .odin-send.is-stop { color: var(--text-muted); }
 .odin-send.is-stop:hover { color: var(--text-on-accent, #fff); background: var(--background-modifier-error-hover, var(--background-modifier-error)); }
 
-/* ask_user — an inline question callout with a styled answer field */
+/* ask_user — an inline question callout; once answered it keeps the question and shows the answer */
 .odin-ask { background: var(--background-secondary); border: 1px solid var(--interactive-accent); border-radius: var(--radius-m, 8px); padding: 10px 11px; }
+.odin-ask.is-answered { border-color: var(--background-modifier-border); }
 .odin-ask-q { font-weight: 600; line-height: 1.45; margin-bottom: 8px; }
-.odin-ask-input { width: 100%; font: inherit; font-size: 13.5px; color: var(--text-normal); background: var(--background-modifier-form-field); border: 1px solid var(--background-modifier-border); border-radius: var(--radius-s, 4px); padding: 6px 9px; outline: none; box-shadow: none; transition: border-color 0.15s; }
+.odin-ask-a { color: var(--text-normal); line-height: 1.45; padding-top: 8px; border-top: 1px solid var(--background-modifier-border); }
+.odin-ask.is-answered .odin-ask-q { margin-bottom: 0; color: var(--text-muted); font-weight: 500; }
+.odin-ask-input { width: 100%; font: inherit; font-size: var(--odin-fs-base); color: var(--text-normal); background: var(--background-modifier-form-field); border: 1px solid var(--background-modifier-border); border-radius: var(--radius-s, 4px); padding: 6px 9px; outline: none; box-shadow: none; transition: border-color 0.15s; }
 .odin-ask-input:focus { border-color: var(--background-modifier-border-focus); box-shadow: none; }
 .odin-ask-input::placeholder { color: var(--text-faint); }
-.odin-ask-hint { font-size: 11px; color: var(--text-faint); margin-top: 5px; }
+.odin-ask-hint { font-size: var(--odin-fs-xs); color: var(--text-faint); margin-top: 5px; }
 
 /* history */
-.odin-history { display: flex; flex-direction: column; gap: 4px; }
+.odin-history { display: flex; flex-direction: column; gap: var(--odin-gap-xs); }
 .odin-hist-row { display: flex; justify-content: space-between; align-items: center; padding: 2px 0; }
 .odin-hist-title { cursor: pointer; }
 .odin-hist-title:hover { color: var(--interactive-accent); }
-.odin-hist-del { --icon-size: 15px; }
+.odin-hist-del { --icon-size: var(--odin-icon-base); }
+
+/* ===== motion keyframes (transform/opacity only) ===== */
+@keyframes odin-spin { to { transform: rotate(360deg); } }
+@keyframes odin-breathe { 0%, 100% { transform: scale(0.7); opacity: 0.5; } 50% { transform: scale(1); opacity: 1; } }
+@keyframes odin-rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes odin-card-in { from { opacity: 0; transform: translateY(8px) scale(0.98); } to { opacity: 1; transform: none; } }
+@keyframes odin-node-in { from { opacity: 0; transform: translateX(-5px); } to { opacity: 1; transform: none; } }
+@keyframes odin-caret { 0%, 35% { opacity: 1; } 65%, 100% { opacity: 0.2; } }
+@keyframes odin-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+@keyframes odin-pop { from { opacity: 0; transform: translateY(6px) scale(0.98); } to { opacity: 1; transform: none; } }
+
+/* honor reduced-motion: drop every animation; keep the shimmer label legible (solid text) */
+@media (prefers-reduced-motion: reduce) {
+  .odin-msg, .odin-think, .odin-card.is-open, .odin-slash, .odin-editpop,
+  .odin-tl-node, .odin-tl-node.is-live .odin-tl-dot::after,
+  .odin-tl-ic.is-spin, .odin-think-ic.is-spin, .odin-think-head.is-live .odin-think-label,
+  .odin-assistant.is-streaming::after { animation: none !important; }
+  .odin-chev { transition: none; }
+  .odin-pb:active, .odin-send:active, .odin-bubble:active { transform: none; }
+  .odin-think-head.is-live .odin-think-label { -webkit-text-fill-color: currentColor; color: var(--text-normal); }
+}
 
 /* ===== in-editor inline diff (CodeMirror) ===== */
 .cm-line.odin-cm-del {
