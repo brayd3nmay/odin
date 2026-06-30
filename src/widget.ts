@@ -655,9 +655,9 @@ export class FloatingWidget {
     const ui = {
       onAskUser: (q: string) => { tx.break(); return this.askUser(q); },
       onProposeEdit: (content: string, summary: string) => { tx.break(); return this.proposeEdit(content, summary); },
-      // Self-editing tools: each is gated behind an inline Approve/Decline. The style guide is
-      // append-only (persisted here, where the plugin lives); the skill file is written by the
-      // agent only after this resolves true.
+      // Self-editing tools: each is gated behind an inline Approve/Decline. Style-guide changes are
+      // persisted here (where the plugin lives); skill files are written/removed by the agent only
+      // after this resolves true.
       onUpdateStyleGuide: async (pref: string) => {
         tx.break();
         const ok = await this.confirmInline("Add this to your formatting style guide?", pref);
@@ -668,9 +668,30 @@ export class FloatingWidget {
         }
         return ok;
       },
+      onReplaceStyleGuide: async (content: string) => {
+        tx.break();
+        const next = content.trim();
+        const ok = await this.confirmInline(
+          next ? "Replace your formatting style guide?" : "Clear your formatting style guide?",
+          next || "(removes all saved preferences)",
+        );
+        if (ok) {
+          this.plugin.settings.styleGuide = next;
+          await this.plugin.saveSettings();
+        }
+        return ok;
+      },
       onCreateSkill: (slug: string, summary: string) => {
         tx.break();
         return this.confirmInline(`Create a new skill “${slug}”?`, summary);
+      },
+      onEditSkill: (slug: string, summary: string) => {
+        tx.break();
+        return this.confirmInline(`Update the skill “${slug}”?`, summary);
+      },
+      onDeleteSkill: (slug: string, summary: string) => {
+        tx.break();
+        return this.confirmInline(`Delete the skill “${slug}”?`, summary);
       },
       onTool: (n: string) => tx.tool(n),
       onThinking: (d: string) => tx.thinking(d),
@@ -682,6 +703,7 @@ export class FloatingWidget {
     try {
       const { text: full, sessionId } = await this.plugin.agent.chat(prompt, thread.sessionId, ui, {
         provider: cfg.provider, model: cfg.model, thinking: cfg.thinking, allowWeb: this.plugin.settings.allowWeb, abort,
+        styleGuide: this.plugin.settings.styleGuide,
       });
       thread.sessionId = sessionId;
       tx.finish(full);

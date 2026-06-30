@@ -2,7 +2,7 @@ import { query, tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk"
 import { Codex, ThreadEvent, ThreadOptions } from "@openai/codex-sdk";
 import { z } from "zod";
 import { execSync } from "child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "fs";
 import * as os from "os";
 import * as path from "path";
 import { extractText, stripFences, preserveEdges } from "./parse";
@@ -42,13 +42,15 @@ export const PROMPTS = {
     "Your replies are shown to the user as rendered Markdown, so write Markdown directly — use headings, " +
     "lists, bold/italics, and inline code where they help. Do NOT wrap your whole reply in a code fence; " +
     "reserve fenced code blocks for actual code, or for when the user explicitly asks to see raw Markdown source." +
-    "\n\nYou also have two tools for evolving how you work — but use them ONLY when the user EXPLICITLY asks " +
-    "you to, never proactively or to be helpful: update_style_guide appends ONE concise formatting preference " +
-    "to the user's Refine style guide (use it when they tell you how they like notes formatted and ask you to " +
-    "remember it — it is appended, never overwriting); create_skill saves a reusable workflow as a skill file " +
-    "(use it when they ask you to save or remember a workflow). The user approves each with a confirmation, so " +
-    "only call them on a direct request like \"remember that…\" or \"save this as a skill\". A newly created skill " +
-    "is immediately runnable by the user typing /<name> in the composer.",
+    "\n\nYou also have tools for evolving how you work — but use them ONLY when the user EXPLICITLY asks you " +
+    "to, never proactively or to be helpful. Style guide (the user's Refine formatting preferences): " +
+    "update_style_guide appends ONE concise preference (never overwriting); replace_style_guide rewrites the " +
+    "WHOLE guide — use it to change or remove existing preferences, or pass an empty string to clear it (the " +
+    "current guide, if any, is shown below). Skills (reusable workflows saved as files): create_skill saves a " +
+    "new one, edit_skill overwrites an existing one (Read its SKILL.md first and pass the complete new " +
+    "contents), and delete_skill removes one. The user approves each with a confirmation, so only call them on " +
+    "a direct request like \"remember that…\", \"save this as a skill\", \"update my … skill\", or \"forget that " +
+    "preference\". A created or edited skill is runnable by the user typing /<name> in the composer.",
 };
 
 type ExecProbe = (cmd: string) => string;
@@ -137,6 +139,9 @@ export interface RunOpts {
   thinking: ThinkingLevel;
   allowWeb: boolean;
   abort: AbortController;
+  // The user's current Refine style guide, surfaced to the chat model so replace_style_guide
+  // (edit/clear) can act on what actually exists. Only set for chat; ignored elsewhere.
+  styleGuide?: string;
 }
 
 // Live streaming hooks. Driven by includePartialMessages: text/thinking deltas arrive as
@@ -155,9 +160,12 @@ export interface AgentUI extends StreamHooks {
   onAskUser(q: string): Promise<string>;
   onProposeEdit?(content: string, summary: string): Promise<EditResult>;
   // Self-editing tools (chat only). Each resolves whether the user approved the inline confirmation.
-  // The style guide is persisted by the UI; the skill file is written here only after approval.
+  // Style-guide changes are persisted by the UI; skill files are written/removed here after approval.
   onUpdateStyleGuide?(preference: string): Promise<boolean>;
+  onReplaceStyleGuide?(content: string): Promise<boolean>;
   onCreateSkill?(slug: string, summary: string): Promise<boolean>;
+  onEditSkill?(slug: string, summary: string): Promise<boolean>;
+  onDeleteSkill?(slug: string, summary: string): Promise<boolean>;
 }
 
 // ponytail: parent_tool_use_id is required (string | null) in SDKUserMessage; brief omitted it.
@@ -350,20 +358,30 @@ export class AgentClient {
     const tools: any[] = [this.askUserTool(ui)];
     if (ui.onProposeEdit) tools.push(this.proposeEditTool(ui));
     if (ui.onUpdateStyleGuide) tools.push(this.updateStyleGuideTool(ui));
+    if (ui.onReplaceStyleGuide) tools.push(this.replaceStyleGuideTool(ui));
     if (ui.onCreateSkill) tools.push(this.createSkillTool(ui));
+    if (ui.onEditSkill) tools.push(this.editSkillTool(ui));
+    if (ui.onDeleteSkill) tools.push(this.deleteSkillTool(ui));
     const odin = createSdkMcpServer({ name: "odin", version: "1.0.0", tools });
     const builtins = builtinTools(o.allowWeb);
     const allowed = [...builtins, "mcp__odin__ask_user"];
     if (ui.onProposeEdit) allowed.push("mcp__odin__propose_note_edit");
     if (ui.onUpdateStyleGuide) allowed.push("mcp__odin__update_style_guide");
+    if (ui.onReplaceStyleGuide) allowed.push("mcp__odin__replace_style_guide");
     if (ui.onCreateSkill) allowed.push("mcp__odin__create_skill");
+    if (ui.onEditSkill) allowed.push("mcp__odin__edit_skill");
+    if (ui.onDeleteSkill) allowed.push("mcp__odin__delete_skill");
 
+    const guide = o.styleGuide?.trim();
+    const systemPrompt = guide
+      ? `${PROMPTS.chat}\n\nThe user's CURRENT Refine style guide (what replace_style_guide overwrites; edit or clear it only on explicit request):\n${guide}`
+      : PROMPTS.chat;
     const messages: any[] = [];
     let sessionId = resumeSessionId ?? "";
     for await (const m of query({
       prompt: once(userText),
       options: {
-        systemPrompt: PROMPTS.chat,
+        systemPrompt,
         model: o.model,
         cwd: this.cfg.cwd,
         tools: builtins,
@@ -561,5 +579,88 @@ export class AgentClient {
       },
       { annotations: { readOnlyHint: false } },
     );
+  }
+
+  // Overwrite an EXISTING skill's SKILL.md. Mirror of createSkillTool but inverted: the skill must
+  // already exist (create_skill handles new ones). Same slug/containment guard; write after approval.
+  private editSkillTool(ui: AgentUI) {
+    return tool(
+      "edit_skill",
+      "Overwrite an EXISTING skill at .claude/skills/<name>/SKILL.md with new contents. First Read the " +
+        "current SKILL.md, then pass the COMPLETE new description and instructions (this replaces the whole " +
+        "file). Use ONLY when the user explicitly asks to change an existing skill. Fails if no such skill " +
+        "exists — use create_skill for new ones.",
+      {
+        name: z.string().describe("Name of the existing skill (its directory slug)"),
+        description: z.string().describe("The complete new one-line description"),
+        instructions: z.string().describe("The complete new skill body in Markdown (replaces the old body)"),
+      },
+      async (args) => {
+        const text = (t: string) => ({ content: [{ type: "text" as const, text: t }] });
+        const slug = skillSlug(args.name);
+        if (!slug) return text("Invalid skill name.");
+        const root = path.resolve(this.cfg.cwd, ".claude", "skills");
+        const dir = path.join(root, slug);
+        if (!path.resolve(dir).startsWith(root + path.sep)) return text("Refused: unsafe skill path.");
+        const file = path.join(dir, "SKILL.md");
+        if (!existsSync(file)) return text(this.noSuchSkill(slug));
+        const ok = await ui.onEditSkill!(slug, args.description.trim());
+        if (!ok) return text("User declined; the skill was not changed.");
+        writeFileSync(file, skillDoc(slug, args.description, args.instructions), "utf8");
+        return text(`Updated skill "${slug}".`);
+      },
+      { annotations: { readOnlyHint: false } },
+    );
+  }
+
+  // Delete an EXISTING skill directory. Same containment guard; removes only after approval.
+  private deleteSkillTool(ui: AgentUI) {
+    return tool(
+      "delete_skill",
+      "Delete an EXISTING skill (removes .claude/skills/<name>/ and its SKILL.md). Use ONLY when the user " +
+        "explicitly asks to delete or remove a skill. The user approves before it is removed.",
+      { name: z.string().describe("Name of the existing skill (its directory slug)") },
+      async (args) => {
+        const text = (t: string) => ({ content: [{ type: "text" as const, text: t }] });
+        const slug = skillSlug(args.name);
+        if (!slug) return text("Invalid skill name.");
+        const root = path.resolve(this.cfg.cwd, ".claude", "skills");
+        const dir = path.join(root, slug);
+        if (!path.resolve(dir).startsWith(root + path.sep)) return text("Refused: unsafe skill path.");
+        const file = path.join(dir, "SKILL.md");
+        if (!existsSync(file)) return text(this.noSuchSkill(slug));
+        const desc = parseSkill(readFileSync(file, "utf8")).description;
+        const ok = await ui.onDeleteSkill!(slug, desc);
+        if (!ok) return text("User declined; the skill was not deleted.");
+        rmSync(dir, { recursive: true, force: true });
+        return text(`Deleted skill "${slug}".`);
+      },
+      { annotations: { readOnlyHint: false } },
+    );
+  }
+
+  // Replace the entire Refine style guide (or clear it with ""). The UI confirms + persists; this tool
+  // only forwards the request. One primitive covers editing and deleting within the single text blob.
+  private replaceStyleGuideTool(ui: AgentUI) {
+    return tool(
+      "replace_style_guide",
+      "Replace the user's ENTIRE Refine style guide with new content (pass an empty string to clear it). " +
+        "Use ONLY when the user explicitly asks to change, fix, or remove their formatting preferences; the " +
+        "current guide is shown in your context. The user approves before it is saved.",
+      { content: z.string().describe("The complete new style guide (empty string clears it entirely)") },
+      async (args) => {
+        const ok = await ui.onReplaceStyleGuide!(args.content);
+        return {
+          content: [{ type: "text" as const, text: ok ? "Style guide updated." : "User declined; style guide unchanged." }],
+        };
+      },
+      { annotations: { readOnlyHint: false } },
+    );
+  }
+
+  // Shared not-found message for edit/delete: name the missing slug and list what does exist.
+  private noSuchSkill(slug: string): string {
+    const existing = this.listSkills().map((s) => s.slug);
+    return `No skill named "${slug}" exists. Existing skills: ${existing.length ? existing.join(", ") : "(none)"}. Use create_skill to make a new one.`;
   }
 }
