@@ -5,7 +5,7 @@ import builtins from "builtin-modules";
 const production = process.argv[2] === "production";
 
 // Runtime shims injected at the top of the bundle to bridge Electron's renderer (Chromium
-// globals) and the Node-targeted Claude Agent SDK:
+// globals) and Node-targeted agent SDKs:
 //  1. import.meta.url: the SDK uses createRequire(import.meta.url) at module top level. Bundled
 //     to CJS, esbuild turns `import.meta` into `{}`, so that becomes createRequire(undefined)
 //     which throws at load. Define import.meta.url as the bundle's own file URL.

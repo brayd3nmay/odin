@@ -1,6 +1,8 @@
 import { App, PluginSettingTab, Setting, debounce } from "obsidian";
 
+export type AgentProvider = "claude" | "codex";
 export type ThinkingLevel = "off" | "normal" | "high";
+export type FeatureKey = "fixFormatting" | "refine" | "findGaps" | "chat";
 
 export interface FeatureConfig {
   model: string;
@@ -8,6 +10,7 @@ export interface FeatureConfig {
 }
 
 export interface OdinSettings {
+  provider: AgentProvider;
   fixFormatting: FeatureConfig;
   refine: FeatureConfig;
   findGaps: FeatureConfig;
@@ -15,13 +18,27 @@ export interface OdinSettings {
   styleGuide: string;
   allowWeb: boolean;
   claudePath: string; // "" = auto-detect
+  codexPath: string; // "" = auto-detect
 }
 
-export const MODELS = [
+export const PROVIDERS: { id: AgentProvider; label: string }[] = [
+  { id: "claude", label: "Claude" },
+  { id: "codex", label: "Codex" },
+];
+
+export const CLAUDE_MODELS = [
   { id: "opus", label: "Opus" },
   { id: "sonnet", label: "Sonnet" },
   { id: "haiku", label: "Haiku" },
 ];
+
+export const CODEX_MODELS = [
+  { id: "auto", label: "Codex default" },
+  { id: "gpt-5.5", label: "GPT-5.5" },
+  { id: "gpt-5.4-mini", label: "GPT-5.4 mini" },
+];
+
+export const MODELS = CLAUDE_MODELS;
 
 export const THINKING_LEVELS: { id: ThinkingLevel; label: string }[] = [
   { id: "off", label: "No thinking" },
@@ -29,7 +46,72 @@ export const THINKING_LEVELS: { id: ThinkingLevel; label: string }[] = [
   { id: "high", label: "Think hard" },
 ];
 
+export const FEATURE_KEYS: FeatureKey[] = ["fixFormatting", "refine", "findGaps", "chat"];
+
+const PROVIDER_FEATURE_DEFAULTS: Record<AgentProvider, Record<FeatureKey, FeatureConfig>> = {
+  claude: {
+    fixFormatting: { model: "haiku", thinking: "off" },
+    refine: { model: "sonnet", thinking: "normal" },
+    findGaps: { model: "sonnet", thinking: "high" },
+    chat: { model: "sonnet", thinking: "normal" },
+  },
+  codex: {
+    fixFormatting: { model: "gpt-5.4-mini", thinking: "off" },
+    refine: { model: "gpt-5.5", thinking: "normal" },
+    findGaps: { model: "gpt-5.5", thinking: "high" },
+    chat: { model: "gpt-5.5", thinking: "normal" },
+  },
+};
+
+export function modelsForProvider(provider: AgentProvider) {
+  return provider === "codex" ? CODEX_MODELS : CLAUDE_MODELS;
+}
+
+export function providerLabel(provider: AgentProvider): string {
+  return PROVIDERS.find((p) => p.id === provider)?.label ?? provider;
+}
+
+export function defaultFeatureConfig(provider: AgentProvider, key: FeatureKey): FeatureConfig {
+  return { ...PROVIDER_FEATURE_DEFAULTS[provider][key] };
+}
+
+function validProvider(value: unknown): AgentProvider {
+  return value === "codex" ? "codex" : "claude";
+}
+
+function validThinking(value: unknown, fallback: ThinkingLevel): ThinkingLevel {
+  return value === "off" || value === "normal" || value === "high" ? value : fallback;
+}
+
+function normalizeFeatureConfig(provider: AgentProvider, key: FeatureKey, stored: unknown): FeatureConfig {
+  const base = defaultFeatureConfig(provider, key);
+  const partial = typeof stored === "object" && stored !== null ? stored as Partial<FeatureConfig> : {};
+  const allowedModels = new Set(modelsForProvider(provider).map((m) => m.id));
+  const model = typeof partial.model === "string" && allowedModels.has(partial.model) ? partial.model : base.model;
+  return {
+    model,
+    thinking: validThinking(partial.thinking, base.thinking),
+  };
+}
+
+export function normalizeSettings(stored: unknown): OdinSettings {
+  const data = typeof stored === "object" && stored !== null ? stored as Partial<OdinSettings> : {};
+  const provider = validProvider(data.provider);
+  return {
+    provider,
+    fixFormatting: normalizeFeatureConfig(provider, "fixFormatting", data.fixFormatting),
+    refine: normalizeFeatureConfig(provider, "refine", data.refine),
+    findGaps: normalizeFeatureConfig(provider, "findGaps", data.findGaps),
+    chat: normalizeFeatureConfig(provider, "chat", data.chat),
+    styleGuide: typeof data.styleGuide === "string" ? data.styleGuide : "",
+    allowWeb: typeof data.allowWeb === "boolean" ? data.allowWeb : true,
+    claudePath: typeof data.claudePath === "string" ? data.claudePath : "",
+    codexPath: typeof data.codexPath === "string" ? data.codexPath : "",
+  };
+}
+
 export const DEFAULT_SETTINGS: OdinSettings = {
+  provider: "claude",
   fixFormatting: { model: "haiku", thinking: "off" },
   refine: { model: "sonnet", thinking: "normal" },
   findGaps: { model: "sonnet", thinking: "high" },
@@ -37,6 +119,7 @@ export const DEFAULT_SETTINGS: OdinSettings = {
   styleGuide: "",
   allowWeb: true,
   claudePath: "",
+  codexPath: "",
 };
 
 export function thinkingTokens(level: ThinkingLevel): number {
@@ -57,13 +140,13 @@ export class OdinSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
 
-    const featureRow = (name: string, key: "fixFormatting" | "refine" | "findGaps" | "chat") => {
+    const featureRow = (name: string, key: FeatureKey) => {
       const cfg = this.plugin.settings[key];
       new Setting(containerEl)
         .setName(name)
         .setDesc("Model and thinking level")
         .addDropdown((d) => {
-          for (const m of MODELS) d.addOption(m.id, m.label);
+          for (const m of modelsForProvider(this.plugin.settings.provider)) d.addOption(m.id, m.label);
           d.setValue(cfg.model).onChange(async (v) => {
             cfg.model = v;
             await this.plugin.saveSettings();
@@ -77,6 +160,19 @@ export class OdinSettingTab extends PluginSettingTab {
           });
         });
     };
+
+    new Setting(containerEl).setName("Agent").setHeading();
+    new Setting(containerEl)
+      .setName("Provider")
+      .setDesc("Use your local logged-in Claude Code or Codex CLI session.")
+      .addDropdown((d) => {
+        for (const p of PROVIDERS) d.addOption(p.id, p.label);
+        d.setValue(this.plugin.settings.provider).onChange(async (v) => {
+          this.plugin.settings = normalizeSettings({ ...this.plugin.settings, provider: v as AgentProvider });
+          await this.plugin.saveSettings();
+          this.display();
+        });
+      });
 
     new Setting(containerEl).setName("Defaults per feature").setHeading();
     featureRow("Fix Formatting", "fixFormatting");
@@ -116,6 +212,15 @@ export class OdinSettingTab extends PluginSettingTab {
       .addText((t) =>
         t.setValue(this.plugin.settings.claudePath).onChange(async (v) => {
           this.plugin.settings.claudePath = v.trim();
+          await this.plugin.saveSettings();
+        }),
+      );
+    new Setting(containerEl)
+      .setName("Codex executable path (optional)")
+      .setDesc("Leave blank to auto-detect your installed `codex`. Codex uses your ChatGPT login by default.")
+      .addText((t) =>
+        t.setValue(this.plugin.settings.codexPath).onChange(async (v) => {
+          this.plugin.settings.codexPath = v.trim();
           await this.plugin.saveSettings();
         }),
       );

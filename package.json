@@ -1,7 +1,7 @@
 {
   "name": "odin",
   "version": "0.1.0",
-  "description": "Floating Claude assistant for Obsidian.",
+  "description": "Floating Claude or Codex assistant for Obsidian.",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",
@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "latest",
+    "@openai/codex-sdk": "^0.142.4",
     "zod": "^4"
   }
 }

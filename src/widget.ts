@@ -6,7 +6,7 @@ import { showDiff, hideDiff } from "./editor-diff";
 import { planDiff } from "./diffplan";
 import { PROMPTS, StreamHooks } from "./agent";
 import { newThread, addMessage, ChatThread } from "./history";
-import { MODELS, THINKING_LEVELS, FeatureConfig, ThinkingLevel } from "./settings";
+import { THINKING_LEVELS, FeatureConfig, ThinkingLevel, modelsForProvider, providerLabel } from "./settings";
 import { CLAUDE_SPARK } from "./icons";
 
 type Mode = "collapsed" | "card";
@@ -18,6 +18,7 @@ const TOOL_LABELS: Record<string, string> = {
   Grep: "Searching your vault",
   WebSearch: "Searching the web",
   WebFetch: "Reading a web page",
+  Shell: "Inspecting your vault",
 };
 function toolLabel(name: string): string | null {
   if (name.startsWith("mcp__")) return null; // internal (ask_user / propose_note_edit) — not a step
@@ -132,7 +133,7 @@ export class FloatingWidget {
     const header = this.card.createDiv({ cls: "odin-header" });
     const title = header.createDiv({ cls: "odin-title" });
     html(title.createSpan({ cls: "odin-title-spark" }), CLAUDE_SPARK);
-    title.createSpan({ text: "Claude" });
+    title.createSpan({ text: "Odin" });
     header.createDiv({ cls: "odin-spacer" });
     this.iconBtn(header, "plus", "New chat", () => this.newChat());
     const histBtn = this.iconBtn(header, "clock", "History", () => this.toggleHistory());
@@ -166,7 +167,7 @@ export class FloatingWidget {
     });
     const bar = this.field.createDiv({ cls: "odin-inbar" });
     this.modelSel = this.ghostSelect(bar, (ev) =>
-      this.pickerMenu(ev, MODELS, this.plugin.settings.chat.model, (id) => { this.plugin.settings.chat.model = id; }));
+      this.pickerMenu(ev, modelsForProvider(this.plugin.settings.provider), this.plugin.settings.chat.model, (id) => { this.plugin.settings.chat.model = id; }));
     this.thinkSel = this.ghostSelect(bar, (ev) =>
       this.pickerMenu(ev, THINKING_LEVELS, this.plugin.settings.chat.thinking, (id) => { this.plugin.settings.chat.thinking = id as ThinkingLevel; }));
     bar.createDiv({ cls: "odin-spacer" });
@@ -205,9 +206,9 @@ export class FloatingWidget {
 
   private refreshSelectors() {
     const cfg = this.plugin.settings.chat;
-    const model = MODELS.find((m) => m.id === cfg.model)?.label ?? cfg.model;
+    const model = modelsForProvider(this.plugin.settings.provider).find((m) => m.id === cfg.model)?.label ?? cfg.model;
     const think = THINKING_LEVELS.find((t) => t.id === cfg.thinking)?.label ?? cfg.thinking;
-    this.modelSel.setText(model);
+    this.modelSel.setText(`${providerLabel(this.plugin.settings.provider)}: ${model}`);
     setIcon(this.modelSel.createSpan({ cls: "odin-car" }), "chevron-down");
     this.thinkSel.setText(think);
     setIcon(this.thinkSel.createSpan({ cls: "odin-car" }), "chevron-down");
