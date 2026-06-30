@@ -117,12 +117,19 @@
 /* messages */
 .odin-user {
   align-self: flex-end; max-width: 85%;
-  background: color-mix(in srgb, var(--interactive-accent) 12%, var(--background-primary));
+  /* a touch more purple than before (12% → 18%) with a faint accent border for definition — reads as
+     "yours" on light and dark themes without the heavy solid fill of an accent button */
+  background: color-mix(in srgb, var(--interactive-accent) 18%, var(--background-primary));
+  border: 1px solid color-mix(in srgb, var(--interactive-accent) 24%, transparent);
   color: var(--text-normal); padding: 6px 11px; border-radius: var(--radius-m, 8px);
 }
 /* slash-command echo: a user bubble, but monospaced so it reads as an invoked command */
 .odin-cmd { font-family: var(--font-monospace); font-size: var(--odin-fs-sm); }
-.odin-assistant { max-width: 100%; color: var(--text-normal); }
+.odin-assistant { position: relative; max-width: 100%; color: var(--text-normal); }
+/* hover copy button, pinned top-right of the reply (re-attached after each markdown render) */
+.odin-copy { position: absolute; top: 0; right: 0; opacity: 0; --icon-size: var(--odin-icon-sm); transition: opacity 0.12s; }
+.odin-assistant:hover .odin-copy { opacity: 0.55; }
+.odin-copy:hover { opacity: 1; }
 /* The reply is rendered as Markdown (block elements) on every delta, so the container must NOT use
    white-space: pre-wrap — that would turn the whitespace between rendered blocks into visible blank
    lines mid-stream, which then collapse when is-streaming is removed (a jarring reflow at the end). */
@@ -139,8 +146,6 @@
 /* the native code-block copy button Obsidian injects into rendered replies runs large by default;
    scope it down to the card's scale (this is brief #6's "copy button is too big"). */
 .odin-card .copy-code-button { font-size: var(--odin-fs-xs); padding: 2px 6px; --icon-size: var(--odin-icon-sm); }
-.odin-status { color: var(--text-muted); }
-.odin-status-ok { color: var(--text-success); }
 .odin-error { color: var(--text-error); }
 /* status line with a leading glyph (e.g. hammer for an applied edit) — muted, no green check */
 .odin-statline { display: flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: var(--odin-fs-sm); }
@@ -154,7 +159,7 @@
 .odin-pb.is-accept { background: var(--interactive-accent); border-color: var(--interactive-accent); color: var(--text-on-accent); }
 .odin-pb.is-accept:hover { background: var(--interactive-accent-hover); }
 .odin-pb-ic { --icon-size: var(--odin-icon-base); display: inline-flex; }
-.odin-kbd { font-family: var(--font-monospace); font-size: var(--odin-fs-sm); padding: 1px 5px; border-radius: var(--radius-s, 4px); background: var(--background-modifier-border); }
+.odin-kbd { font-family: var(--font-monospace); font-size: var(--odin-fs-base); padding: 2px 6px; border-radius: var(--radius-s, 4px); background: var(--background-modifier-border); }
 .odin-pb.is-accept .odin-kbd { background: rgba(255, 255, 255, 0.22); }
 
 /* edit-approval prompt — sits in flow between the stream and the input (not floating over messages),
@@ -218,7 +223,7 @@
 .odin-ghostsel { font-size: var(--odin-fs-sm); color: var(--text-muted); background: transparent; border: none; cursor: pointer; padding: 3px 6px; border-radius: var(--radius-s, 4px); display: inline-flex; gap: 4px; align-items: center; box-shadow: none; }
 .odin-ghostsel:hover { background: var(--background-modifier-hover); color: var(--text-normal); }
 .odin-car { --icon-size: var(--odin-icon-sm); color: var(--text-faint); display: inline-flex; }
-.odin-esc-hint { font-size: var(--odin-fs-xs); color: var(--text-faint); margin-right: 2px; }
+.odin-esc-hint { font-size: var(--odin-fs-base); color: var(--text-faint); margin-right: 4px; }
 /* clickable-icon (Obsidian) sizes the glyph correctly; we just set the size + accent color. */
 .odin-send { flex: 0 0 auto; --icon-size: var(--odin-icon-base); color: var(--interactive-accent); transition: color 0.12s, transform 0.08s ease; }
 .odin-send:hover { color: var(--interactive-accent-hover); }
@@ -235,7 +240,7 @@
 .odin-ask-input { width: 100%; font: inherit; font-size: var(--odin-fs-base); color: var(--text-normal); background: var(--background-modifier-form-field); border: 1px solid var(--background-modifier-border); border-radius: var(--radius-s, 4px); padding: 6px 9px; outline: none; box-shadow: none; transition: border-color 0.15s; }
 .odin-ask-input:focus { border-color: var(--background-modifier-border-focus); box-shadow: none; }
 .odin-ask-input::placeholder { color: var(--text-faint); }
-.odin-ask-hint { font-size: var(--odin-fs-xs); color: var(--text-faint); margin-top: 5px; }
+.odin-ask-hint { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; font-size: var(--odin-fs-sm); color: var(--text-faint); margin-top: 6px; }
 
 /* history */
 .odin-history { display: flex; flex-direction: column; gap: var(--odin-gap-xs); }
