@@ -1,30 +1,6 @@
-export interface EditorLike {
-  getSelection(): string;
-  replaceSelection(s: string): void;
-  getValue(): string;
-  setValue(s: string): void;
-}
-
-export interface Target {
-  text: string;
-  isSelection: boolean;
-}
-
-export function getTarget(e: EditorLike): Target {
-  const sel = e.getSelection();
-  return sel && sel.length > 0
-    ? { text: sel, isSelection: true }
-    : { text: e.getValue(), isSelection: false };
-}
-
-export function applyTarget(e: EditorLike, t: Target, newText: string): void {
-  if (t.isSelection) e.replaceSelection(newText);
-  else e.setValue(newText);
-}
-
-// ---- Line-region editing (used by the in-editor inline diff) ----
-// A minimal slice of Obsidian's Editor: line-addressed reads/writes. Kept as an interface so
-// this module stays free of the `obsidian` runtime and remains unit-testable.
+// Line-region editing for the in-editor inline diff. A minimal slice of Obsidian's Editor
+// (line-addressed reads/writes), kept as an interface so this module stays free of the
+// `obsidian` runtime and remains unit-testable.
 export interface Pos {
   line: number;
   ch: number;

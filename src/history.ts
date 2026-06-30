@@ -6,7 +6,6 @@ export interface ChatMsg {
 export interface ChatThread {
   id: string;
   title: string;
-  createdAt: number;
   sessionId?: string;
   messages: ChatMsg[];
 }
@@ -17,8 +16,8 @@ export function titleFrom(text: string): string {
   return clean.length <= 40 ? clean : clean.slice(0, 40) + "…";
 }
 
-export function newThread(id: string, createdAt: number): ChatThread {
-  return { id, title: "New chat", createdAt, messages: [] };
+export function newThread(id: string): ChatThread {
+  return { id, title: "New chat", messages: [] };
 }
 
 export function addMessage(t: ChatThread, role: "user" | "assistant", text: string): ChatThread {

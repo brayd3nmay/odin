@@ -13,7 +13,7 @@ describe("titleFrom", () => {
 
 describe("addMessage", () => {
   it("titles the thread from the first user message only", () => {
-    const t = newThread("id1", 123);
+    const t = newThread("id1");
     addMessage(t, "user", "first question");
     addMessage(t, "assistant", "an answer");
     addMessage(t, "user", "second question");

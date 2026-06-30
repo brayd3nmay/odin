@@ -6,7 +6,7 @@ import { showDiff, hideDiff } from "./editor-diff";
 import { planDiff } from "./diffplan";
 import { PROMPTS, StreamHooks } from "./agent";
 import { newThread, addMessage, ChatThread } from "./history";
-import { MODELS, THINKING_LEVELS, FeatureConfig } from "./settings";
+import { MODELS, THINKING_LEVELS, FeatureConfig, ThinkingLevel } from "./settings";
 import { CLAUDE_SPARK } from "./icons";
 
 type Mode = "collapsed" | "card";
@@ -132,7 +132,6 @@ export class FloatingWidget {
   }
 
   private buildChrome() {
-    // header: title · history · window controls
     const header = this.card.createDiv({ cls: "buddy-header" });
     const title = header.createDiv({ cls: "buddy-title" });
     html(title.createSpan({ cls: "buddy-title-spark" }), CLAUDE_SPARK);
@@ -157,13 +156,11 @@ export class FloatingWidget {
     const composer = this.card.createDiv({ cls: "buddy-composer" });
     this.editPop = composer.createDiv({ cls: "buddy-editpop" });
 
-    // quick actions: big icons, left aligned, own hover color
     const actions = composer.createDiv({ cls: "buddy-actions" });
     this.quickAction(actions, "fix", "list-checks", "Fix formatting");
     this.quickAction(actions, "refine", "wand-2", "Refine");
     this.quickAction(actions, "gaps", "search", "Find gaps");
 
-    // composer: one input box holds the textarea with an inner toolbar (model · thinking · send)
     const footer = composer.createDiv({ cls: "buddy-footer" });
     this.field = footer.createDiv({ cls: "buddy-field" });
     this.input = this.field.createEl("textarea", {
@@ -171,8 +168,10 @@ export class FloatingWidget {
       attr: { placeholder: "Ask anything…", rows: "1" },
     });
     const bar = this.field.createDiv({ cls: "buddy-inbar" });
-    this.modelSel = this.ghostSelect(bar, (ev) => this.modelMenu(ev));
-    this.thinkSel = this.ghostSelect(bar, (ev) => this.thinkMenu(ev));
+    this.modelSel = this.ghostSelect(bar, (ev) =>
+      this.pickerMenu(ev, MODELS, this.plugin.settings.chat.model, (id) => { this.plugin.settings.chat.model = id; }));
+    this.thinkSel = this.ghostSelect(bar, (ev) =>
+      this.pickerMenu(ev, THINKING_LEVELS, this.plugin.settings.chat.thinking, (id) => { this.plugin.settings.chat.thinking = id as ThinkingLevel; }));
     bar.createDiv({ cls: "buddy-spacer" });
     bar.createSpan({ cls: "buddy-esc-hint" });
     this.send = bar.createEl("button", { cls: "buddy-send" });
@@ -216,26 +215,12 @@ export class FloatingWidget {
     setIcon(this.thinkSel.createSpan({ cls: "buddy-car" }), "chevron-down");
   }
 
-  private modelMenu(ev: MouseEvent) {
+  private pickerMenu(ev: MouseEvent, items: { id: string; label: string }[], current: string, choose: (id: string) => void) {
     const menu = new Menu();
-    for (const m of MODELS) {
+    for (const it of items) {
       menu.addItem((i) =>
-        i.setTitle(m.label).setChecked(this.plugin.settings.chat.model === m.id).onClick(async () => {
-          this.plugin.settings.chat.model = m.id;
-          await this.plugin.saveSettings();
-          this.refreshSelectors();
-        }),
-      );
-    }
-    menu.showAtMouseEvent(ev);
-  }
-
-  private thinkMenu(ev: MouseEvent) {
-    const menu = new Menu();
-    for (const t of THINKING_LEVELS) {
-      menu.addItem((i) =>
-        i.setTitle(t.label).setChecked(this.plugin.settings.chat.thinking === t.id).onClick(async () => {
-          this.plugin.settings.chat.thinking = t.id;
+        i.setTitle(it.label).setChecked(current === it.id).onClick(async () => {
+          choose(it.id);
           await this.plugin.saveSettings();
           this.refreshSelectors();
         }),
@@ -328,38 +313,28 @@ export class FloatingWidget {
     if (!region.text.trim()) { this.addMsg("buddy-error", "Nothing to format."); return; }
 
     const cfg = kind === "fix" ? this.plugin.settings.fixFormatting : this.plugin.settings.refine;
-    this.setBusy(true);
-    const thinking = new Thinking(this.streamEl, () => this.scroll());
-    const abort = this.track(new AbortController());
-    try {
-      const proposed = await this.plugin.agent.transform(this.basePromptFor(kind), region.text, {
-        model: cfg.model, thinking: cfg.thinking, allowWeb: false, abort,
-      }, { onThinking: (d) => thinking.reasoning(d) });
-      thinking.collapse();
-      this.setBusy(false);
-      this.presentEdit(view, editor, region, proposed, (instruction) =>
-        this.steerTransform(view, editor, region, proposed, kind, cfg, instruction));
-    } catch (e) {
-      thinking.collapse();
-      this.setBusy(false);
-      this.showError(this.addMsg("buddy-status"), e);
-    }
+    this.runTransform(view, editor, region, kind, cfg);
   }
 
-  private async steerTransform(view: any, editor: LineEditor, region: Region, prev: string, kind: "fix" | "refine", cfg: FeatureConfig, instruction: string) {
+  // One Fix/Refine pass over the region, then preview the result. A steering `instruction` (from
+  // reviewing a previous result) is folded into the prompt; the transform always re-runs against
+  // the ORIGINAL text, never its own output.
+  private async runTransform(view: any, editor: LineEditor, region: Region, kind: "fix" | "refine", cfg: FeatureConfig, instruction?: string) {
     this.setBusy(true);
     const thinking = new Thinking(this.streamEl, () => this.scroll());
     const abort = this.track(new AbortController());
-    const followPrompt = `${this.basePromptFor(kind)}\n\nThe user reviewed your previous result and asks: "${instruction}". ` +
-      `Apply that to the text below (which is the ORIGINAL, not your previous output).`;
+    const prompt = instruction
+      ? `${this.basePromptFor(kind)}\n\nThe user reviewed your previous result and asks: "${instruction}". ` +
+        `Apply that to the text below (which is the ORIGINAL, not your previous output).`
+      : this.basePromptFor(kind);
     try {
-      const next = await this.plugin.agent.transform(followPrompt, region.text, {
+      const proposed = await this.plugin.agent.transform(prompt, region.text, {
         model: cfg.model, thinking: cfg.thinking, allowWeb: false, abort,
       }, { onThinking: (d) => thinking.reasoning(d) });
       thinking.collapse();
       this.setBusy(false);
-      this.presentEdit(view, editor, region, next, (instr) =>
-        this.steerTransform(view, editor, region, next, kind, cfg, instr));
+      this.presentEdit(view, editor, region, proposed, (instr) =>
+        this.runTransform(view, editor, region, kind, cfg, instr));
     } catch (e) {
       thinking.collapse();
       this.setBusy(false);
@@ -556,7 +531,7 @@ export class FloatingWidget {
   // ---- history ----
   private ensureThread() {
     if (!this.thread) {
-      this.thread = newThread(crypto.randomUUID(), Date.now());
+      this.thread = newThread(crypto.randomUUID());
       this.plugin.threads.unshift(this.thread);
     }
     return this.thread;
