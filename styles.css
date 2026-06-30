@@ -90,7 +90,7 @@
 .odin-pb.is-accept { background: var(--interactive-accent); border-color: var(--interactive-accent); color: var(--text-on-accent); }
 .odin-pb.is-accept:hover { background: var(--interactive-accent-hover); }
 .odin-pb-ic { --icon-size: 15px; display: inline-flex; }
-.odin-kbd { font-family: var(--font-monospace); font-size: 10px; padding: 1px 5px; border-radius: var(--radius-s, 4px); background: var(--background-modifier-border); }
+.odin-kbd { font-family: var(--font-monospace); font-size: 12px; padding: 1px 5px; border-radius: var(--radius-s, 4px); background: var(--background-modifier-border); }
 .odin-pb.is-accept .odin-kbd { background: rgba(255, 255, 255, 0.22); }
 
 /* edit-approval popup — floats just above the composer (anchored, not in the scrolling stream),
