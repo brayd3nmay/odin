@@ -6,7 +6,7 @@ import { showDiff, hideDiff } from "./editor-diff";
 import { planDiff } from "./diffplan";
 import { PROMPTS, StreamHooks, EditResult } from "./agent";
 import { newThread, addMessage, ChatThread } from "./history";
-import { THINKING_LEVELS, FeatureConfig, ThinkingLevel, modelChoices, providerLabel } from "./settings";
+import { THINKING_LEVELS, FeatureConfig, ThinkingLevel, modelChoices, providerLabel, AgentProvider } from "./settings";
 import { SkillInfo } from "./skill";
 import { brandMark } from "./icons";
 
@@ -23,7 +23,10 @@ const STEPS: Record<string, { icon: string; label: string; spin?: boolean }> = {
   Shell: { icon: "terminal", label: "Inspecting your vault" },
   // the chat agent's own self-editing tools, surfaced as timeline nodes:
   update_style_guide: { icon: "pencil", label: "Updating your style guide" },
+  replace_style_guide: { icon: "pencil", label: "Updating your style guide" },
   create_skill: { icon: "puzzle", label: "Creating a skill" },
+  edit_skill: { icon: "puzzle", label: "Updating a skill" },
+  delete_skill: { icon: "trash-2", label: "Deleting a skill" },
 };
 // Strip the mcp__<server>__ prefix so in-process tools map to STEPS by bare name; only ask_user and
 // propose_note_edit are hidden (they render their own inline UI, not a timeline node).
@@ -102,7 +105,10 @@ class Thinking {
     if (icon) setIcon(ic, icon);
     const body = node.createDiv({ cls: "odin-tl-body" });
     const labelRow = body.createDiv({ cls: "odin-tl-label" });
-    labelRow.createSpan({ text: label });
+    // A think node carries no label of its own — the head is the sole "Thinking…"/"Thought for Ns"
+    // text, so the timeline reads as ONE list (a reasoning dot, then labelled tool steps) with no
+    // duplicated "Thinking" inside "Thinking". Tool nodes still pass their real label.
+    if (label) labelRow.createSpan({ text: label });
     let detail: HTMLElement | null = null;
     if (kind === "think") {
       node.addClass("is-open");
@@ -118,7 +124,7 @@ class Thinking {
   }
 
   reasoning(delta: string) {
-    if (!this.live || this.live.kind !== "think") this.openNode("think", null, "Thinking");
+    if (!this.live || this.live.kind !== "think") this.openNode("think", null, "");
     const n = this.live!;
     n.text += delta;
     if (n.detail) { n.detail.setText(n.text); n.detail.scrollTop = n.detail.scrollHeight; }
@@ -139,6 +145,7 @@ class Thinking {
   private markLastDone() {
     if (!this.live) return;
     this.live.el.removeClass("is-live");
+    this.live.ic.removeClass("is-spin"); // a finished web step must stop spinning (CSS animates is-spin forever)
     if (this.live.kind === "think") this.live.el.removeClass("is-open");
     this.live = null;
   }
@@ -209,6 +216,7 @@ export class FloatingWidget {
   private busy = false;
   // Auto-scroll follows new output only while the user is already at the bottom (see scroll()).
   private stick = true;
+  private scrollObserver?: MutationObserver;
   // Slash-command menu state (open while slashItems is non-empty).
   private slashItems: { entry: SlashEntry; el: HTMLElement }[] = [];
   private slashSel = 0;
@@ -257,6 +265,22 @@ export class FloatingWidget {
     this.streamEl.addEventListener("scroll", () => {
       const el = this.streamEl;
       this.stick = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+    });
+    // Content grows asynchronously — streamed markdown re-renders, a thread loading its messages,
+    // late timeline nodes — without firing a scroll event. When the user is parked at the bottom,
+    // keep them pinned there. scroll() is stick-guarded, so this never yanks a user who scrolled up.
+    this.scrollObserver = new MutationObserver(() => this.scroll());
+    this.scrollObserver.observe(this.streamEl, { childList: true, subtree: true });
+
+    // ⌘N / Ctrl+N starts a new chat, but only while focus is inside the card — so when Odin is
+    // collapsed, Obsidian's global "new note" ⌘N is untouched. stopPropagation keeps it from also
+    // reaching Obsidian's document-level handler. (registerDomEvent auto-cleans on plugin unload.)
+    this.plugin.registerDomEvent(this.card, "keydown", (ev) => {
+      if ((ev.metaKey || ev.ctrlKey) && !ev.altKey && ev.key.toLowerCase() === "n") {
+        ev.preventDefault();
+        ev.stopPropagation();
+        this.newChat();
+      }
     });
 
     // composer zone. The edit-approval prompt sits between the stream and the input (in flow, not
@@ -450,7 +474,7 @@ export class FloatingWidget {
     setIcon(this.expandBtn, this.expanded ? "minimize-2" : "maximize-2");
     setTooltip(this.expandBtn, this.expanded ? "Shrink" : "Expand");
   }
-  destroy() { this.cancelAll(); this.root.remove(); }
+  destroy() { this.cancelAll(); this.scrollObserver?.disconnect(); this.root.remove(); }
 
   private addMsg(cls: string, text?: string): HTMLElement {
     this.clearEmpty();
@@ -477,6 +501,15 @@ export class FloatingWidget {
   // The identical tail of every run's catch block: surface the error in a fresh status line.
   private fail(e: unknown) { this.showError(this.addMsg("odin-error"), e); }
 
+  // Guard a run: if the chosen provider's CLI didn't resolve, say so plainly instead of letting the
+  // SDK spawn and fail with a raw ENOENT. (availableProviders fails open when NEITHER resolves, so
+  // this catches the common one-CLI-installed-but-the-other-selected case.)
+  private cliReady(provider: AgentProvider): boolean {
+    if (this.plugin.agent.availableProviders().includes(provider)) return true;
+    this.addMsg("odin-error", `${providerLabel(provider)} CLI not found. Install it and log in, or set its path in Odin settings.`);
+    return false;
+  }
+
   // A streaming assistant reply: Markdown is re-rendered live as deltas arrive, with a blinking caret
   // until done. Renders are coalesced (one at a time) and lightly throttled so a fast stream doesn't
   // thrash the renderer; the loop keeps going until the rendered text matches the latest received.
@@ -485,12 +518,16 @@ export class FloatingWidget {
     let raw = "";
     let shown = "";
     let running = false;
+    // A hover copy button. renderMd's replaceChildren wipes el's children, so re-attach after each
+    // render; reading raw lazily means it copies the full reply, not a mid-stream snapshot.
+    const copyBtn = this.attachCopy(el, () => raw);
     const pump = async () => {
       if (running) return;
       running = true;
       while (shown !== raw) {
         const snap = raw;
         await this.renderMd(el, snap);
+        el.appendChild(copyBtn);
         shown = snap;
         this.scroll();
         await sleep(90);
@@ -501,6 +538,21 @@ export class FloatingWidget {
       append: (d) => { raw += d; void pump(); },
       done: () => { el.removeClass("is-streaming"); void pump(); },
     };
+  }
+
+  // A hover copy button pinned to an assistant bubble. getText is read lazily so a streaming reply
+  // copies its final text.
+  private attachCopy(el: HTMLElement, getText: () => string): HTMLElement {
+    const b = el.createEl("button", { cls: "odin-copy clickable-icon" });
+    setIcon(b, "copy");
+    setTooltip(b, "Copy");
+    b.onclick = (e) => {
+      e.stopPropagation();
+      void navigator.clipboard.writeText(getText());
+      setIcon(b, "check");
+      window.setTimeout(() => setIcon(b, "copy"), 1200);
+    };
+    return b;
   }
 
   // Render Markdown off-DOM, then swap it in atomically so the bubble never flashes empty mid-stream.
@@ -523,12 +575,15 @@ export class FloatingWidget {
   }
 
   private track(c: AbortController): AbortController { this.aborters.add(c); return c; }
-  private stop() { this.cancelRuns(); }
+  // Stop is the same as Esc: abort the run AND resolve/clear any pending ask, confirm, or diff so we
+  // never leave an orphaned approval box with no run behind it.
+  private stop() { this.cancelAll(); }
   private cancelRuns() { for (const c of this.aborters) c.abort(); this.aborters.clear(); this.setBusy(false); }
   private cancelAll() { this.cancelRuns(); this.clearPending(); this.clearDiff(); }
   private clearPending() {
-    if (this.pendingAsk) { const r = this.pendingAsk; this.pendingAsk = null; r(""); }
-    if (this.pendingConfirm) { const r = this.pendingConfirm; this.pendingConfirm = null; r(false); }
+    // Drive each through its own resolver (send/done), which is idempotent and also updates its box UI.
+    this.pendingAsk?.("");
+    this.pendingConfirm?.(false);
   }
 
   private submit() {
@@ -554,6 +609,13 @@ export class FloatingWidget {
       if (ev.key === "ArrowUp") { ev.preventDefault(); this.setSlashSel((this.slashSel - 1 + n) % n); return; }
       if (ev.key === "Enter" || ev.key === "Tab") { ev.preventDefault(); this.chooseSlash(this.slashItems[this.slashSel].entry); return; }
       if (ev.key === "Escape") { ev.preventDefault(); this.hideSlash(); return; }
+    }
+    // A pending inline approval (style guide / skill): ⌘↵ approves, Esc declines, and a bare Enter is
+    // swallowed so it can't submit a chat mid-confirmation. Same contract as the edit prompt below.
+    if (this.pendingConfirm) {
+      if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) { ev.preventDefault(); this.pendingConfirm(true); return; }
+      if (ev.key === "Enter") { ev.preventDefault(); return; }
+      if (ev.key === "Escape") { ev.preventDefault(); this.pendingConfirm(false); return; }
     }
     if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey) && this.pendingDiff) {
       ev.preventDefault();
@@ -586,6 +648,7 @@ export class FloatingWidget {
   // the chat agent (steerPrompt → sendChat), not another toolless transform — the transform can only
   // emit note content, so it can't answer questions or use tools.
   private async runTransform(view: any, editor: LineEditor, region: Region, kind: "fix" | "refine", cfg: FeatureConfig) {
+    if (!this.cliReady(cfg.provider)) return;
     this.setBusy(true);
     this.clearEmpty();
     const thinking = new Thinking(this.streamEl, () => this.scroll());
@@ -608,10 +671,12 @@ export class FloatingWidget {
   private async runGaps() {
     const view = this.plugin.activeMarkdownView();
     if (!view) { this.addMsg("odin-error", "Open a note first."); return; }
-    const text = view.editor.getValue();
+    // Honor a selection (like Fix/Refine via getRegion); falls back to the whole note when none.
+    const text = getRegion(view.editor as unknown as LineEditor).text;
     if (!text.trim()) { this.addMsg("odin-error", "This note is empty."); return; }
 
     const cfg = this.plugin.settings.findGaps;
+    if (!this.cliReady(cfg.provider)) return;
     this.setBusy(true);
     this.clearEmpty();
     const tx = this.newTranscript();
@@ -622,9 +687,9 @@ export class FloatingWidget {
         `Here is my note. Find gaps and quiz me.\n\n---\n${text}`,
         {
           onAskUser: (q) => { tx.break(); return this.askUser(q); },
-          onTool: (n) => tx.tool(n),
-          onThinking: (d) => tx.thinking(d),
-          onText: (d) => tx.text(d),
+          onTool: (n) => { if (!abort.signal.aborted) tx.tool(n); },
+          onThinking: (d) => { if (!abort.signal.aborted) tx.thinking(d); },
+          onText: (d) => { if (!abort.signal.aborted) tx.text(d); },
         },
         { provider: cfg.provider, model: cfg.model, thinking: cfg.thinking, allowWeb: this.plugin.settings.allowWeb, abort },
       );
@@ -644,6 +709,7 @@ export class FloatingWidget {
     // (correctly) report "your message came through empty". submit() already guards, this backstops it.
     if (this.busy || !text.trim()) return;
     this.open();
+    if (!this.cliReady(this.plugin.settings.chat.provider)) return;
     const thread = this.ensureThread();
     addMessage(thread, "user", display);
     this.addMsg("odin-user").setText(display);
@@ -693,9 +759,11 @@ export class FloatingWidget {
         tx.break();
         return this.confirmInline(`Delete the skill “${slug}”?`, summary);
       },
-      onTool: (n: string) => tx.tool(n),
-      onThinking: (d: string) => tx.thinking(d),
-      onText: (d: string) => tx.text(d),
+      // Ignore any deltas that arrive after an abort — the stream can yield one last buffered message
+      // whose nodes would otherwise orphan into a Transcript whose DOM is about to be wiped.
+      onTool: (n: string) => { if (!abort.signal.aborted) tx.tool(n); },
+      onThinking: (d: string) => { if (!abort.signal.aborted) tx.thinking(d); },
+      onText: (d: string) => { if (!abort.signal.aborted) tx.text(d); },
     };
     // Tell the agent which note is open so it edits/reads the right file instead of guessing.
     const openPath = this.plugin.activeMarkdownView()?.file?.path;
@@ -766,7 +834,20 @@ export class FloatingWidget {
       this.pendingDiff = {
         view: cm,
         // Clear the preview decorations before mutating the doc so nothing maps through the change.
-        accept: () => { this.clearDiff(); applyRegion(editor, region, proposed); finish({ accepted: true }); },
+        // Guard against a stale diff: if the user switched notes or edited the buffer while this sat
+        // open, the captured region no longer maps — refuse rather than clobber the wrong lines.
+        accept: () => {
+          if (!this.regionUnchanged(view, editor, region)) {
+            this.exitSteer();
+            this.clearDiff();
+            this.statusLine("x", "The note changed since this edit was proposed — ask again to redo it.");
+            resolve({ accepted: false });
+            return;
+          }
+          this.clearDiff();
+          applyRegion(editor, region, proposed);
+          finish({ accepted: true });
+        },
         reject: () => finish({ accepted: false }),
         steer: (instr) => {
           this.clearDiff();
@@ -791,6 +872,19 @@ export class FloatingWidget {
     setIcon(el.createSpan({ cls: "odin-statline-ic" }), icon);
     el.createSpan({ text });
     return el;
+  }
+
+  // Has the open note drifted from what was reviewed (user switched notes, or edited the buffer while
+  // the diff sat open)? If so, applying the captured region could clobber the wrong lines.
+  private regionUnchanged(view: any, editor: LineEditor, region: Region): boolean {
+    try {
+      if (this.plugin.activeMarkdownView() !== view) return false;
+      if (editor.lineCount() <= region.toLine) return false;
+      const cur = editor.getRange({ line: region.fromLine, ch: 0 }, { line: region.toLine, ch: editor.getLine(region.toLine).length });
+      return cur === region.text;
+    } catch {
+      return false;
+    }
   }
 
   private enterSteer() {
@@ -824,18 +918,23 @@ export class FloatingWidget {
       const box = this.addMsg("odin-ask");
       box.createDiv({ cls: "odin-ask-q", text: question });
       const input = box.createEl("input", { cls: "odin-ask-input", attr: { placeholder: "Type your answer…" } });
-      const hint = box.createDiv({ cls: "odin-ask-hint", text: "Enter to send · Esc to skip" });
+      const hint = box.createDiv({ cls: "odin-ask-hint" });
+      hint.createSpan({ cls: "odin-kbd", text: "↵" });
+      hint.createSpan({ text: " send · " });
+      hint.createSpan({ cls: "odin-kbd", text: "Esc" });
+      hint.createSpan({ text: " skip" });
       input.focus();
-      this.pendingAsk = resolve;
       const send = (answer: string) => {
+        if (this.pendingAsk !== send) return; // already answered or cancelled
+        this.pendingAsk = null;
         // Keep the question on screen; swap the input out for the answer so the exchange reads as Q → A.
         input.remove();
         hint.remove();
         box.addClass("is-answered");
         box.createDiv({ cls: "odin-ask-a", text: answer || "Skipped" });
-        this.pendingAsk = null;
         resolve(answer);
       };
+      this.pendingAsk = send;
       input.onkeydown = (ev: KeyboardEvent) => {
         if (ev.key === "Enter" && input.value.trim()) { ev.preventDefault(); send(input.value.trim()); return; }
         if (ev.key === "Escape") { ev.preventDefault(); send(""); }
@@ -843,8 +942,9 @@ export class FloatingWidget {
     });
   }
 
-  // Inline Approve/Decline for the agent's self-editing tools (style guide / new skill). Resolves
-  // false if the run is cancelled while waiting (see clearPending).
+  // Inline Approve/Decline for the agent's self-editing tools (style guide / new skill). Same keyboard
+  // contract as the edit prompt — ⌘↵ approves, Esc declines (routed via onInputKey while the composer
+  // is focused). Resolves false if the run is cancelled while waiting (see clearPending).
   private confirmInline(title: string, body: string): Promise<boolean> {
     return new Promise((resolve) => {
       const box = this.addMsg("odin-confirm");
@@ -854,18 +954,22 @@ export class FloatingWidget {
       const accept = acts.createEl("button", { cls: "odin-pb is-accept" });
       setIcon(accept.createSpan({ cls: "odin-pb-ic" }), "check");
       accept.createSpan({ text: "Approve" });
-      const reject = acts.createEl("button", { cls: "odin-pb", text: "Decline" });
-      this.pendingConfirm = resolve;
+      accept.createSpan({ cls: "odin-kbd", text: "⌘↵" });
+      const reject = acts.createEl("button", { cls: "odin-pb" });
+      reject.createSpan({ text: "Decline" });
+      reject.createSpan({ cls: "odin-kbd", text: "Esc" });
       const done = (ok: boolean) => {
-        if (this.pendingConfirm !== resolve) return; // already resolved/cancelled
+        if (this.pendingConfirm !== done) return; // already resolved/cancelled
         this.pendingConfirm = null;
         acts.remove();
         box.addClass("is-answered");
         box.createDiv({ cls: "odin-confirm-result", text: ok ? "✓ Approved" : "Declined" });
         resolve(ok);
       };
+      this.pendingConfirm = done;
       accept.onclick = () => done(true);
       reject.onclick = () => done(false);
+      this.input.focus(); // make ⌘↵ / Esc live immediately
     });
   }
 
@@ -896,7 +1000,8 @@ export class FloatingWidget {
   }
 
   // Start a fresh chat, discarding the on-screen conversation but keeping prior threads in history.
-  private newChat() { this.historyOpen = false; this.thread = null; this.resetStream(); }
+  // open() keeps focus/visibility on the card (the header "+" and the ⌘N hotkey both call this).
+  private newChat() { this.historyOpen = false; this.thread = null; this.resetStream(); this.open(); }
 
   private toggleHistory() {
     if (this.historyOpen) {
@@ -932,7 +1037,10 @@ export class FloatingWidget {
     this.resetStream();
     for (const m of t.messages) {
       if (m.role === "user") this.addMsg("odin-user").setText(m.text);
-      else this.renderMd(this.addMsg("odin-assistant"), m.text);
+      else {
+        const el = this.addMsg("odin-assistant");
+        void this.renderMd(el, m.text).then(() => this.attachCopy(el, () => m.text));
+      }
     }
   }
 }
