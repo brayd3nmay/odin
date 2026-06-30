@@ -106,6 +106,7 @@ export class FloatingWidget {
   private thinkSel!: HTMLElement;
   private mode: Mode = "collapsed";
   private expanded = false;
+  private historyOpen = false;
   private thread: ChatThread | null = null;
   private pendingAsk: ((answer: string) => void) | null = null;
   private aborters = new Set<AbortController>();
@@ -137,12 +138,12 @@ export class FloatingWidget {
     html(title.createSpan({ cls: "buddy-title-spark" }), CLAUDE_SPARK);
     title.createSpan({ text: "Claude" });
     header.createDiv({ cls: "buddy-spacer" });
-    const histBtn = this.iconBtn(header, "clock", "History", () => this.showHistory());
+    this.iconBtn(header, "plus", "New chat", () => this.newChat());
+    const histBtn = this.iconBtn(header, "clock", "History", () => this.toggleHistory());
     histBtn.addClass("buddy-hist");
     header.createDiv({ cls: "buddy-divider" });
     this.iconBtn(header, "minus", "Minimize", () => this.close());
     this.iconBtn(header, "maximize-2", "Expand", () => this.expand());
-    this.iconBtn(header, "x", "Close", () => this.close());
 
     this.streamEl = this.card.createDiv({ cls: "buddy-stream" });
     // Track whether the user is parked at the bottom; if they scroll up to read (e.g. the
@@ -548,12 +549,23 @@ export class FloatingWidget {
     return kind === "fix" ? PROMPTS.fixFormatting : PROMPTS.refine(this.plugin.settings.styleGuide);
   }
 
+  // Start a fresh chat, discarding the on-screen conversation but keeping prior threads in history.
+  private newChat() { this.historyOpen = false; this.thread = null; this.resetStream(); }
+
+  private toggleHistory() {
+    if (this.historyOpen) {
+      // Close back out to where we were: the current thread, or an empty composer.
+      this.historyOpen = false;
+      this.thread ? this.loadThread(this.thread) : this.resetStream();
+    } else {
+      this.showHistory();
+    }
+  }
+
   private showHistory() {
+    this.historyOpen = true;
     this.resetStream();
     const list = this.addMsg("buddy-history");
-    const nw = list.createEl("button", { cls: "buddy-pb is-accept" });
-    nw.setText("+ New chat");
-    nw.onclick = () => { this.thread = null; this.resetStream(); };
     for (const t of this.plugin.threads) {
       const row = list.createDiv({ cls: "buddy-hist-row" });
       row.createSpan({ cls: "buddy-hist-title", text: t.title }).onclick = () => this.loadThread(t);
@@ -567,6 +579,7 @@ export class FloatingWidget {
     }
   }
   private loadThread(t: ChatThread) {
+    this.historyOpen = false;
     this.thread = t;
     this.resetStream();
     for (const m of t.messages) {
