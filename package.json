@@ -1,11 +1,12 @@
 {
   "name": "odin",
   "version": "0.1.0",
-  "description": "Floating Claude or Codex assistant for Obsidian.",
+  "description": "Floating Odin assistant for Obsidian with Claude or Codex.",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",
     "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+    "build:install": "npm run build && node scripts/install.mjs",
     "test": "vitest run"
   },
   "keywords": [],

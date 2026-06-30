@@ -24,3 +24,12 @@ export function stripFences(s: string): string {
   const m = t.match(/^```[\w-]*\n([\s\S]*?)\n```$/);
   return m ? m[1] : s;
 }
+
+// Reattach the original's leading/trailing whitespace to a transformed version. Fix/Refine must
+// not touch document edges (trailing blank lines etc.), but models silently drop them on rewrite —
+// which surfaces as a phantom "removed blank line" in the diff that steering can't fix. Restore in code.
+export function preserveEdges(original: string, transformed: string): string {
+  const lead = original.match(/^\s*/)![0];
+  const trail = original.match(/\s*$/)![0];
+  return lead + transformed.trim() + trail;
+}

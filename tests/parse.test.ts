@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { extractText, stripFences } from "../src/parse";
+import { extractText, stripFences, preserveEdges } from "../src/parse";
 
 describe("extractText", () => {
   it("prefers the final successful result string", () => {
@@ -25,5 +25,17 @@ describe("stripFences", () => {
   });
   it("leaves unfenced text untouched", () => {
     expect(stripFences("hello")).toBe("hello");
+  });
+});
+
+describe("preserveEdges", () => {
+  it("restores a trailing blank line the model dropped", () => {
+    expect(preserveEdges("a\nb\n", "a\nb")).toBe("a\nb\n");
+  });
+  it("keeps original leading/trailing whitespace, not the transformed body's", () => {
+    expect(preserveEdges("\n\nhi\n", "  hi.  ")).toBe("\n\nhi.\n");
+  });
+  it("is a no-op when edges already match", () => {
+    expect(preserveEdges("a\n", "a\n")).toBe("a\n");
   });
 });

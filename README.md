@@ -1,6 +1,6 @@
 # Odin
 
-A floating AI assistant for [Obsidian](https://obsidian.md/) that fixes formatting, refines notes, finds gaps in your thinking, and chats about your ideas — powered by either the [Claude Agent SDK](https://docs.anthropic.com/agents/overview) or the [Codex SDK](https://developers.openai.com/codex/sdk).
+A floating Odin assistant for [Obsidian](https://obsidian.md/) that fixes formatting, refines notes, finds gaps in your thinking, and chats about your ideas — powered by either the [Claude Agent SDK](https://docs.anthropic.com/agents/overview) or the [Codex SDK](https://developers.openai.com/codex/sdk).
 
 **Desktop-only plugin** that uses your local logged-in agent CLI. No API key is required for the built-in Claude or Codex provider paths: Claude authenticates through Claude Code, and Codex authenticates through your ChatGPT-backed Codex login.
 

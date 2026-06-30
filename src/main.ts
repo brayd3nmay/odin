@@ -28,7 +28,7 @@ export default class OdinPlugin extends Plugin {
     this.registerEditorExtension(odinDiffField);
 
     this.addCommand({
-      id: "toggle-claude-widget",
+      id: "toggle-odin-widget",
       name: "Toggle Odin widget",
       callback: () => this.widget.toggle(),
     });
