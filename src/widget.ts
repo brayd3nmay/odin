@@ -1,163 +1,347 @@
-import { setIcon } from "obsidian";
+import { Menu, setTooltip } from "obsidian";
+import type { EditorView } from "@codemirror/view";
 import type BuddyPlugin from "./main";
-import { getTarget, applyTarget } from "./edit";
-import type { Target, EditorLike } from "./edit";
-import { diffLines } from "./diff";
-import { PROMPTS } from "./agent";
+import { getRegion, applyRegion, Region, LineEditor } from "./edit";
+import { showDiff, hideDiff } from "./editor-diff";
+import { PROMPTS, StreamHooks } from "./agent";
 import { newThread, addMessage, ChatThread } from "./history";
 import { MODELS, THINKING_LEVELS, FeatureConfig } from "./settings";
-
-// Official Claude "spark" mark. Uses currentColor (not the brand orange) so it greys to
-// match Obsidian's other icons — muted by default, accent on hover via the widget CSS.
-const CLAUDE_SVG =
-  `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 256 257" ` +
-  `preserveAspectRatio="xMidYMid" fill="currentColor">` +
-  `<path d="m50.228 170.321 50.357-28.257.843-2.463-.843-1.361h-2.462l-8.426-.518-28.775-.778-24.952-1.037-24.175-1.296-6.092-1.297L0 125.796l.583-3.759 5.12-3.434 7.324.648 16.202 1.101 24.304 1.685 17.629 1.037 26.118 2.722h4.148l.583-1.685-1.426-1.037-1.101-1.037-25.147-17.045-27.22-18.017-14.258-10.37-7.713-5.25-3.888-4.925-1.685-10.758 7-7.713 9.397.649 2.398.648 9.527 7.323 20.35 15.75L94.817 91.9l3.889 3.24 1.555-1.102.195-.777-1.75-2.917-14.453-26.118-15.425-26.572-6.87-11.018-1.814-6.61c-.648-2.723-1.102-4.991-1.102-7.778l7.972-10.823L71.42 0 82.05 1.426l4.472 3.888 6.61 15.101 10.694 23.786 16.591 32.34 4.861 9.592 2.592 8.879.973 2.722h1.685v-1.556l1.36-18.211 2.528-22.36 2.463-28.776.843-8.1 4.018-9.722 7.971-5.25 6.222 2.981 5.12 7.324-.713 4.73-3.046 19.768-5.962 30.98-3.889 20.739h2.268l2.593-2.593 10.499-13.934 17.628-22.036 7.778-8.749 9.073-9.657 5.833-4.601h11.018l8.1 12.055-3.628 12.443-11.342 14.388-9.398 12.184-13.48 18.147-8.426 14.518.778 1.166 2.01-.194 30.46-6.481 16.462-2.982 19.637-3.37 8.88 4.148.971 4.213-3.5 8.62-20.998 5.184-24.628 4.926-36.682 8.685-.454.324.519.648 16.526 1.555 7.065.389h17.304l32.21 2.398 8.426 5.574 5.055 6.805-.843 5.184-12.962 6.611-17.498-4.148-40.83-9.721-14-3.5h-1.944v1.167l11.666 11.406 21.387 19.314 26.767 24.887 1.36 6.157-3.434 4.86-3.63-.518-23.526-17.693-9.073-7.972-20.545-17.304h-1.36v1.814l4.73 6.935 25.017 37.59 1.296 11.536-1.814 3.76-6.481 2.268-7.13-1.297-14.647-20.544-15.1-23.138-12.185-20.739-1.49.843-7.194 77.448-3.37 3.953-7.778 2.981-6.48-4.925-3.436-7.972 3.435-15.749 4.148-20.544 3.37-16.333 3.046-20.285 1.815-6.74-.13-.454-1.49.194-15.295 20.999-23.267 31.433-18.406 19.702-4.407 1.75-7.648-3.954.713-7.064 4.277-6.286 25.47-32.405 15.36-20.092 9.917-11.6-.065-1.686h-.583L44.07 198.125l-12.055 1.555-5.185-4.86.648-7.972 2.463-2.593 20.35-13.999-.064.065Z"/></svg>`;
+import { CLAUDE_SPARK, icon } from "./icons";
 
 type Mode = "collapsed" | "card";
+
+// Friendly labels for the read-only tools so the thinking steps read in plain language.
+const TOOL_LABELS: Record<string, string> = {
+  Read: "Reading a note",
+  Glob: "Searching your vault",
+  Grep: "Searching your vault",
+  WebSearch: "Searching the web",
+  WebFetch: "Reading a web page",
+};
+function toolLabel(name: string): string | null {
+  if (name.startsWith("mcp__")) return null; // internal (ask_user / propose_note_edit) — not a step
+  return TOOL_LABELS[name] ?? `Using ${name}`;
+}
+
+const html = (el: HTMLElement, svg: string) => { el.innerHTML = svg; };
+
+// A live "thinking" region: spinner + streamed tool steps + reasoning, collapsing to "Thought for Ns".
+class Thinking {
+  el: HTMLElement;
+  private head: HTMLElement;
+  private steps: HTMLElement;
+  private reason: HTMLElement;
+  private lastStep: HTMLElement | null = null;
+  private start = Date.now();
+  private done = false;
+
+  constructor(parent: HTMLElement, scroll: () => void) {
+    this.el = parent.createDiv({ cls: "buddy-think" });
+    this.head = this.el.createDiv({ cls: "buddy-think-head" });
+    this.head.createSpan({ cls: "buddy-spinner" });
+    this.head.createSpan({ cls: "buddy-think-label", text: "Thinking…" });
+    this.steps = this.el.createDiv({ cls: "buddy-steps" });
+    this.reason = this.el.createDiv({ cls: "buddy-think-reason" });
+    this.scroll = scroll;
+  }
+  private scroll: () => void;
+
+  tool(name: string) {
+    const label = toolLabel(name);
+    if (!label) return;
+    this.markLastDone();
+    const step = this.steps.createDiv({ cls: "buddy-step is-live" });
+    html(step.createSpan({ cls: "buddy-step-ic" }), `<span class="buddy-spinner buddy-spinner-sm"></span>`);
+    step.createSpan({ cls: "buddy-step-tx", text: label });
+    this.lastStep = step;
+    this.scroll();
+  }
+
+  reasoning(delta: string) {
+    this.reason.addClass("is-shown");
+    this.reason.setText(this.reason.getText() + delta);
+    this.scroll();
+  }
+
+  private markLastDone() {
+    if (this.lastStep) {
+      this.lastStep.removeClass("is-live");
+      html(this.lastStep.querySelector(".buddy-step-ic") as HTMLElement, icon("tick-02"));
+    }
+  }
+
+  collapse() {
+    if (this.done) return;
+    this.done = true;
+    this.markLastDone();
+    const secs = ((Date.now() - this.start) / 1000).toFixed(1);
+    this.head.empty();
+    this.head.addClass("is-summary");
+    this.head.createSpan({ cls: "buddy-chev", text: "▾" });
+    this.head.createSpan({ text: `Thought for ${secs}s` });
+    this.head.onclick = () => this.el.toggleClass("is-collapsed", !this.el.hasClass("is-collapsed"));
+  }
+}
 
 export class FloatingWidget {
   private root: HTMLElement;
   private bubble: HTMLElement;
   private card: HTMLElement;
   private streamEl!: HTMLElement;
+  private input!: HTMLTextAreaElement;
+  private field!: HTMLElement;
+  private send!: HTMLElement;
+  private modelSel!: HTMLElement;
+  private thinkSel!: HTMLElement;
   private mode: Mode = "collapsed";
   private expanded = false;
   private thread: ChatThread | null = null;
-  private pendingPropose: ((accepted: boolean) => void) | null = null;
   private pendingAsk: ((answer: string) => void) | null = null;
   private aborters = new Set<AbortController>();
   private busy = false;
 
+  // The currently-previewed edit (diff shown in the editor; controls in the panel).
+  private pendingDiff: {
+    view: EditorView;
+    accept: () => void;
+    reject: () => void;
+    steer: (instruction: string) => void;
+  } | null = null;
+
   constructor(private plugin: BuddyPlugin) {
     this.root = document.body.createDiv({ cls: "buddy-root" });
-
     this.bubble = this.root.createDiv({ cls: "buddy-bubble" });
-    this.bubble.innerHTML = CLAUDE_SVG;
+    html(this.bubble, CLAUDE_SPARK);
     this.bubble.onclick = () => this.open();
-
     this.card = this.root.createDiv({ cls: "buddy-card" });
-    this.buildCardChrome();
+    this.buildChrome();
     this.setMode("collapsed");
   }
 
-  private buildCardChrome() {
+  private buildChrome() {
+    // header: title · history · window controls
     const header = this.card.createDiv({ cls: "buddy-header" });
     const title = header.createDiv({ cls: "buddy-title" });
-    title.innerHTML = CLAUDE_SVG;
+    html(title.createSpan({ cls: "buddy-title-spark" }), CLAUDE_SPARK);
     title.createSpan({ text: "Claude" });
-
-    const sel = header.createDiv({ cls: "buddy-selectors" });
-    const modelSel = sel.createEl("select", { cls: "buddy-select" });
-    for (const m of MODELS) modelSel.createEl("option", { text: m.label, value: m.id });
-    modelSel.value = this.plugin.settings.chat.model;
-    modelSel.onchange = async () => { this.plugin.settings.chat.model = modelSel.value; await this.plugin.saveSettings(); };
-
-    const thinkSel = sel.createEl("select", { cls: "buddy-select" });
-    for (const t of THINKING_LEVELS) thinkSel.createEl("option", { text: t.label, value: t.id });
-    thinkSel.value = this.plugin.settings.chat.thinking;
-    thinkSel.onchange = async () => {
-      this.plugin.settings.chat.thinking = thinkSel.value as any;
-      await this.plugin.saveSettings();
-    };
-
-    const controls = header.createDiv({ cls: "buddy-controls" });
-    const min = controls.createSpan({ cls: "buddy-ctl" });
-    setIcon(min, "minus");
-    min.onclick = () => this.close();
-    const exp = controls.createSpan({ cls: "buddy-ctl" });
-    setIcon(exp, "maximize-2");
-    exp.onclick = () => this.expand();
-    const close = controls.createSpan({ cls: "buddy-ctl" });
-    setIcon(close, "x");
-    close.onclick = () => this.close();
+    header.createDiv({ cls: "buddy-spacer" });
+    const histBtn = this.iconBtn(header, "clock-01", "History", () => this.showHistory());
+    histBtn.addClass("buddy-hist");
+    header.createDiv({ cls: "buddy-divider" });
+    this.iconBtn(header, "minus-sign", "Minimize", () => this.close());
+    this.iconBtn(header, "arrow-expand-01", "Expand", () => this.expand());
+    this.iconBtn(header, "cancel-01", "Close", () => this.close());
 
     this.streamEl = this.card.createDiv({ cls: "buddy-stream" });
 
-    // Quick-action bar sits directly above the input row.
-    const chips = this.card.createDiv({ cls: "buddy-chips" });
-    const chip = (label: string, kind: "fix" | "refine" | "gaps") => {
-      const c = chips.createDiv({ cls: "buddy-chip", text: label });
-      c.onclick = () => this.runQuickAction(kind);
-    };
-    chip("Fix Formatting", "fix");
-    chip("Refine", "refine");
-    chip("Find Gaps", "gaps");
+    // quick actions: big icons, left aligned, own hover color
+    const actions = this.card.createDiv({ cls: "buddy-actions" });
+    this.quickAction(actions, "fix", "text-check", "Fix formatting");
+    this.quickAction(actions, "refine", "magic-wand-02", "Refine");
+    this.quickAction(actions, "gaps", "search-01", "Find gaps");
 
+    // footer: input row + (model · thinking) on the bottom
     const footer = this.card.createDiv({ cls: "buddy-footer" });
-    const histBtn = footer.createEl("button", { cls: "buddy-hist-btn" });
-    setIcon(histBtn, "history");
-    histBtn.onclick = () => this.showHistory();
-    const input = footer.createEl("textarea", { cls: "buddy-input", attr: { placeholder: "Ask anything…", rows: "1" } });
-    const send = footer.createEl("button", { cls: "buddy-send mod-cta" });
-    setIcon(send, "arrow-up");
-    const submit = () => { const v = input.value.trim(); if (v) { input.value = ""; this.sendChat(v); } };
-    send.onclick = submit;
-    input.onkeydown = (ev: KeyboardEvent) => { if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); submit(); } };
+    const inputRow = footer.createDiv({ cls: "buddy-inputrow" });
+    this.field = inputRow.createDiv({ cls: "buddy-field" });
+    this.input = this.field.createEl("textarea", {
+      cls: "buddy-input",
+      attr: { placeholder: "Ask anything…", rows: "1" },
+    });
+    this.send = inputRow.createEl("button", { cls: "buddy-send" });
+    html(this.send, icon("arrow-up-01"));
+    this.send.onclick = () => (this.busy ? this.stop() : this.submit());
+
+    const botRow = footer.createDiv({ cls: "buddy-botrow" });
+    this.modelSel = this.ghostSelect(botRow, (ev) => this.modelMenu(ev));
+    this.thinkSel = this.ghostSelect(botRow, (ev) => this.thinkMenu(ev));
+    botRow.createDiv({ cls: "buddy-spacer" });
+    botRow.createSpan({ cls: "buddy-esc-hint" });
+    this.refreshSelectors();
+
+    this.input.onfocus = () => this.field.addClass("is-focus");
+    this.input.onblur = () => this.field.removeClass("is-focus");
+    this.input.onkeydown = (ev: KeyboardEvent) => this.onInputKey(ev);
   }
 
+  private iconBtn(parent: HTMLElement, name: Parameters<typeof icon>[0], tip: string, onClick: () => void): HTMLElement {
+    const b = parent.createEl("button", { cls: "buddy-iconbtn" });
+    html(b, icon(name));
+    setTooltip(b, tip);
+    b.onclick = onClick;
+    return b;
+  }
+
+  private quickAction(parent: HTMLElement, kind: "fix" | "refine" | "gaps", name: Parameters<typeof icon>[0], label: string) {
+    const b = parent.createEl("button", { cls: `buddy-qa buddy-qa-${kind}` });
+    html(b.createSpan({ cls: "buddy-qa-ic" }), icon(name));
+    b.createSpan({ text: label });
+    b.onclick = () => this.runQuickAction(kind);
+  }
+
+  private ghostSelect(parent: HTMLElement, onClick: (ev: MouseEvent) => void): HTMLElement {
+    const b = parent.createEl("button", { cls: "buddy-ghostsel" });
+    b.onclick = (ev) => onClick(ev);
+    return b;
+  }
+
+  private refreshSelectors() {
+    const cfg = this.plugin.settings.chat;
+    const model = MODELS.find((m) => m.id === cfg.model)?.label ?? cfg.model;
+    const think = THINKING_LEVELS.find((t) => t.id === cfg.thinking)?.label ?? cfg.thinking;
+    this.modelSel.setText(model);
+    this.modelSel.createSpan({ cls: "buddy-car", text: "▾" });
+    this.thinkSel.setText(think);
+    this.thinkSel.createSpan({ cls: "buddy-car", text: "▾" });
+  }
+
+  private modelMenu(ev: MouseEvent) {
+    const menu = new Menu();
+    for (const m of MODELS) {
+      menu.addItem((i) =>
+        i.setTitle(m.label).setChecked(this.plugin.settings.chat.model === m.id).onClick(async () => {
+          this.plugin.settings.chat.model = m.id;
+          await this.plugin.saveSettings();
+          this.refreshSelectors();
+        }),
+      );
+    }
+    menu.showAtMouseEvent(ev);
+  }
+
+  private thinkMenu(ev: MouseEvent) {
+    const menu = new Menu();
+    for (const t of THINKING_LEVELS) {
+      menu.addItem((i) =>
+        i.setTitle(t.label).setChecked(this.plugin.settings.chat.thinking === t.id).onClick(async () => {
+          this.plugin.settings.chat.thinking = t.id;
+          await this.plugin.saveSettings();
+          this.refreshSelectors();
+        }),
+      );
+    }
+    menu.showAtMouseEvent(ev);
+  }
+
+  // ---- modes ----
   private setMode(mode: Mode) {
     this.mode = mode;
     this.bubble.toggleClass("is-hidden", mode === "card");
     this.card.toggleClass("is-open", mode === "card");
   }
-
-  open() { this.setMode("card"); }
+  open() { this.setMode("card"); this.input?.focus(); }
   close() { this.setMode("collapsed"); }
   toggle() { this.mode === "card" ? this.close() : this.open(); }
-  expand() {
-    this.expanded = !this.expanded;
-    this.card.toggleClass("is-expanded", this.expanded);
-  }
+  expand() { this.expanded = !this.expanded; this.card.toggleClass("is-expanded", this.expanded); }
   destroy() { this.cancelAll(); this.root.remove(); }
 
+  // ---- stream rendering helpers ----
   private addMsg(cls: string, text?: string): HTMLElement {
     const el = this.streamEl.createDiv({ cls: `buddy-msg ${cls}` });
     if (text) el.setText(text);
-    this.streamEl.scrollTop = this.streamEl.scrollHeight;
+    this.scroll();
     return el;
   }
-
+  private scroll() { this.streamEl.scrollTop = this.streamEl.scrollHeight; }
   private showError(el: HTMLElement, e: unknown) {
+    if ((e as any)?.name === "AbortError") { el.remove(); return; }
     el.setText("Error: " + (e instanceof Error ? e.message : String(e)));
     el.addClass("buddy-error");
   }
 
-  private basePromptFor(kind: "fix" | "refine"): string {
-    return kind === "fix" ? PROMPTS.fixFormatting : PROMPTS.refine(this.plugin.settings.styleGuide);
+  // A streaming assistant reply: deltas append with a blinking caret until done.
+  private newReply(): { append: (d: string) => void; done: () => void } {
+    const el = this.addMsg("buddy-assistant is-streaming");
+    return {
+      append: (d) => { el.setText(el.getText() + d); this.scroll(); },
+      done: () => el.removeClass("is-streaming"),
+    };
   }
 
-  // Renders the +/-/space diff lines into a styled box. Shared by the quick-action
-  // diff and chat's propose-edit diff so the two can't drift in markup.
-  private renderDiffLines(parent: HTMLElement, original: string, proposed: string) {
-    const pre = parent.createEl("pre", { cls: "buddy-diffbody" });
-    for (const op of diffLines(original, proposed)) {
-      pre.createDiv({ cls: `buddy-dl buddy-dl-${op.type}` })
-        .setText((op.type === "add" ? "+ " : op.type === "del" ? "- " : "  ") + op.text);
+  private setBusy(on: boolean) {
+    this.busy = on;
+    this.card.toggleClass("is-busy", on);
+    this.send.toggleClass("is-stop", on);
+    html(this.send, icon(on ? "stop" : "arrow-up-01"));
+    (this.card.querySelector(".buddy-esc-hint") as HTMLElement)?.setText(on ? "Esc to stop" : "");
+  }
+
+  private track(c: AbortController): AbortController { this.aborters.add(c); return c; }
+  private stop() { this.cancelRuns(); }
+  private cancelRuns() { for (const c of this.aborters) c.abort(); this.aborters.clear(); this.setBusy(false); }
+  private cancelAll() { this.cancelRuns(); this.clearPending(); this.clearDiff(); }
+  private clearPending() { if (this.pendingAsk) { const r = this.pendingAsk; this.pendingAsk = null; r(""); } }
+
+  // ---- input / keys ----
+  private submit() {
+    const v = this.input.value.trim();
+    if (!v) return;
+    this.input.value = "";
+    if (this.pendingDiff) { this.pendingDiff.steer(v); return; }
+    this.sendChat(v);
+  }
+  private onInputKey(ev: KeyboardEvent) {
+    if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey) && this.pendingDiff) {
+      ev.preventDefault();
+      this.pendingDiff.accept();
+      return;
+    }
+    if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); this.submit(); return; }
+    if (ev.key === "Escape") {
+      ev.preventDefault();
+      if (this.pendingDiff) this.pendingDiff.reject();
+      else if (this.busy) this.stop();
     }
   }
 
+  // ---- quick actions ----
   async runQuickAction(kind: "fix" | "refine" | "gaps") {
     this.open();
+    if (this.busy) return;
     if (kind === "gaps") return this.runGaps();
-    // kind is now narrowed to "fix" | "refine"
     const view = this.plugin.activeMarkdownView();
     if (!view) { this.addMsg("buddy-error", "Open a note first."); return; }
-    const editor = view.editor;
-    const target = getTarget(editor);
-    if (!target.text.trim()) { this.addMsg("buddy-error", "Nothing to format."); return; }
+    const editor = view.editor as unknown as LineEditor;
+    const region = getRegion(editor);
+    if (!region.text.trim()) { this.addMsg("buddy-error", "Nothing to format."); return; }
 
     const cfg = kind === "fix" ? this.plugin.settings.fixFormatting : this.plugin.settings.refine;
-    const status = this.addMsg("buddy-status", kind === "fix" ? "Fixing formatting…" : "Refining…");
+    this.setBusy(true);
+    const thinking = new Thinking(this.streamEl, () => this.scroll());
     const abort = this.track(new AbortController());
     try {
-      const proposed = await this.plugin.agent.transform(this.basePromptFor(kind), target.text, {
+      const proposed = await this.plugin.agent.transform(this.basePromptFor(kind), region.text, {
         model: cfg.model, thinking: cfg.thinking, allowWeb: false, abort,
-      });
-      status.remove();
-      this.renderDiff(target.text, proposed, kind, cfg, target, editor);
+      }, { onThinking: (d) => thinking.reasoning(d) });
+      thinking.collapse();
+      this.setBusy(false);
+      this.presentEdit(view, editor, region, proposed, (instruction) =>
+        this.steerTransform(view, editor, region, proposed, kind, cfg, instruction));
     } catch (e) {
-      this.showError(status, e);
+      thinking.collapse();
+      this.setBusy(false);
+      this.showError(this.addMsg("buddy-status"), e);
+    }
+  }
+
+  private async steerTransform(view: any, editor: LineEditor, region: Region, prev: string, kind: "fix" | "refine", cfg: FeatureConfig, instruction: string) {
+    this.setBusy(true);
+    const thinking = new Thinking(this.streamEl, () => this.scroll());
+    const abort = this.track(new AbortController());
+    const followPrompt = `${this.basePromptFor(kind)}\n\nThe user reviewed your previous result and asks: "${instruction}". ` +
+      `Apply that to the text below (which is the ORIGINAL, not your previous output).`;
+    try {
+      const next = await this.plugin.agent.transform(followPrompt, region.text, {
+        model: cfg.model, thinking: cfg.thinking, allowWeb: false, abort,
+      }, { onThinking: (d) => thinking.reasoning(d) });
+      thinking.collapse();
+      this.setBusy(false);
+      this.presentEdit(view, editor, region, next, (instr) =>
+        this.steerTransform(view, editor, region, next, kind, cfg, instr));
+    } catch (e) {
+      thinking.collapse();
+      this.setBusy(false);
+      this.showError(this.addMsg("buddy-status"), e);
     }
   }
 
@@ -168,23 +352,154 @@ export class FloatingWidget {
     if (!text.trim()) { this.addMsg("buddy-error", "This note is empty."); return; }
 
     const cfg = this.plugin.settings.findGaps;
-    const status = this.addMsg("buddy-status", "Looking for gaps…");
+    this.setBusy(true);
+    const thinking = new Thinking(this.streamEl, () => this.scroll());
+    const reply = this.lazyReply(() => thinking.collapse());
     const abort = this.track(new AbortController());
     try {
       const report = await this.plugin.agent.analysis(
         PROMPTS.findGaps,
         `Here is my note. Find gaps and quiz me.\n\n---\n${text}`,
-        { onAskUser: (q) => this.askUser(q), onProgress: (t) => status.setText(t) },
+        {
+          onAskUser: (q) => this.askUser(q),
+          onTool: (n) => thinking.tool(n),
+          onThinking: (d) => thinking.reasoning(d),
+          onText: (d) => reply.append(d),
+        },
         { model: cfg.model, thinking: cfg.thinking, allowWeb: this.plugin.settings.allowWeb, abort },
       );
-      status.remove();
-      this.addMsg("buddy-report").setText(report);
+      thinking.collapse();
+      reply.finish(report);
+      this.setBusy(false);
     } catch (e) {
-      this.showError(status, e);
+      thinking.collapse();
+      this.setBusy(false);
+      this.showError(this.addMsg("buddy-status"), e);
     }
   }
 
-  // Renders a question with an input; resolves when the user answers. Used as the ask_user handler.
+  // ---- chat ----
+  private async sendChat(text: string) {
+    if (this.busy) return;
+    this.open();
+    const thread = this.ensureThread();
+    addMessage(thread, "user", text);
+    this.addMsg("buddy-user").setText(text);
+    this.setBusy(true);
+    const thinking = new Thinking(this.streamEl, () => this.scroll());
+    const reply = this.lazyReply(() => thinking.collapse());
+    const cfg = this.plugin.settings.chat;
+    const abort = this.track(new AbortController());
+
+    const ui = {
+      onAskUser: (q: string) => this.askUser(q),
+      onProposeEdit: (content: string, summary: string) => this.proposeEdit(content, summary),
+      onTool: (n: string) => thinking.tool(n),
+      onThinking: (d: string) => thinking.reasoning(d),
+      onText: (d: string) => reply.append(d),
+    };
+    try {
+      const { text: full, sessionId } = await this.plugin.agent.chat(text, thread.sessionId, ui, {
+        model: cfg.model, thinking: cfg.thinking, allowWeb: this.plugin.settings.allowWeb, abort,
+      });
+      thread.sessionId = sessionId;
+      thinking.collapse();
+      reply.finish(full);
+      addMessage(thread, "assistant", full);
+      this.setBusy(false);
+      await this.plugin.saveSettings();
+    } catch (e) {
+      thinking.collapse();
+      reply.discard();
+      this.setBusy(false);
+      this.showError(this.addMsg("buddy-status"), e);
+      await this.plugin.saveSettings();
+    }
+  }
+
+  // A reply bubble created on first text delta. `onFirst` runs once (to collapse thinking).
+  private lazyReply(onFirst: () => void) {
+    let r: { append: (d: string) => void; done: () => void } | null = null;
+    let started = false;
+    return {
+      append: (d: string) => {
+        if (!started) { started = true; onFirst(); r = this.newReply(); }
+        r!.append(d);
+      },
+      // Ensure the final text is shown (covers replies that arrive without partial deltas).
+      finish: (full: string) => {
+        if (!started && full.trim()) { onFirst(); r = this.newReply(); r.append(full); }
+        r?.done();
+      },
+      discard: () => r?.done(),
+    };
+  }
+
+  // ---- in-editor diff preview + panel controls ----
+  private presentEdit(view: any, editor: LineEditor, region: Region, proposed: string, steer?: (instruction: string) => void): Promise<boolean> {
+    return new Promise((resolve) => {
+      const cm = (view.editor as any).cm as EditorView;
+      this.clearDiff();
+      showDiff(cm, region.fromLine, region.text, proposed);
+
+      const card = this.addMsg("buddy-noteref");
+      html(card.createSpan({ cls: "buddy-noteref-ic" }), icon("note-01"));
+      card.createSpan({ text: "Proposed an edit — changes are highlighted in your note." });
+      const acts = this.addMsg("buddy-editacts");
+      const accept = acts.createEl("button", { cls: "buddy-pb is-accept" });
+      html(accept.createSpan({ cls: "buddy-pb-ic" }), icon("tick-02"));
+      accept.createSpan({ text: "Accept" });
+      accept.createSpan({ cls: "buddy-kbd", text: "⌘↵" });
+      const reject = acts.createEl("button", { cls: "buddy-pb" });
+      reject.createSpan({ text: "Reject" });
+      reject.createSpan({ cls: "buddy-kbd", text: "Esc" });
+
+      this.enterSteer();
+      const finish = (applied: boolean) => {
+        this.exitSteer();
+        this.clearDiff();
+        acts.remove();
+        card.setText(applied ? "✓ Applied to your note." : "Discarded.");
+        card.removeClass("buddy-noteref");
+        card.addClass(applied ? "buddy-status-ok" : "buddy-status");
+        resolve(applied);
+      };
+      this.pendingDiff = {
+        view: cm,
+        // Clear the preview decorations before mutating the doc so nothing maps through the change.
+        accept: () => { this.clearDiff(); applyRegion(editor, region, proposed); finish(true); },
+        reject: () => finish(false),
+        steer: steer ? (instr) => { this.clearDiff(); acts.remove(); card.remove(); steer(instr); } : () => {},
+      };
+      accept.onclick = () => this.pendingDiff?.accept();
+      reject.onclick = () => this.pendingDiff?.reject();
+    });
+  }
+
+  private enterSteer() {
+    this.field.addClass("is-steer");
+    this.input.setAttribute("placeholder", "Steer this edit…");
+    this.input.focus(); // so ⌘↵ accept / Esc reject / steer typing are live immediately
+  }
+  private exitSteer() {
+    this.field.removeClass("is-steer");
+    this.input.setAttribute("placeholder", "Ask anything…");
+  }
+  private clearDiff() {
+    if (this.pendingDiff) { try { hideDiff(this.pendingDiff.view); } catch { /* view gone */ } }
+    this.pendingDiff = null;
+  }
+
+  // Chat's edit tool: diff the whole open note against the proposed content.
+  private proposeEdit(content: string, _summary: string): Promise<boolean> {
+    const view = this.plugin.activeMarkdownView();
+    if (!view) { this.addMsg("buddy-error", "No open note to edit."); return Promise.resolve(false); }
+    const editor = view.editor as unknown as LineEditor;
+    const region: Region = { fromLine: 0, toLine: editor.lineCount() - 1, text: view.editor.getValue() };
+    return this.presentEdit(view, editor, region, content);
+  }
+
+  // ---- ask_user ----
   askUser(question: string): Promise<string> {
     return new Promise((resolve) => {
       const box = this.addMsg("buddy-ask");
@@ -204,42 +519,7 @@ export class FloatingWidget {
     });
   }
 
-  private renderDiff(
-    original: string, proposed: string,
-    kind: "fix" | "refine",
-    cfg: FeatureConfig,
-    target: Target,
-    editor: EditorLike,
-  ) {
-    const wrap = this.addMsg("buddy-diff");
-    this.renderDiffLines(wrap, original, proposed);
-    const actions = wrap.createDiv({ cls: "buddy-diff-actions" });
-    const accept = actions.createEl("button", { text: "Accept", cls: "mod-cta" });
-    const reject = actions.createEl("button", { text: "Reject" });
-    const steerInput = actions.createEl("input", { cls: "buddy-steer", attr: { placeholder: "Steer (e.g. also bold key terms)…" } });
-
-    accept.onclick = () => { applyTarget(editor, target, proposed); wrap.empty(); wrap.setText("✓ Applied."); };
-    reject.onclick = () => { wrap.empty(); wrap.setText("Discarded."); };
-    steerInput.onkeydown = async (ev: KeyboardEvent) => {
-      if (ev.key !== "Enter" || !steerInput.value.trim()) return;
-      const instruction = steerInput.value.trim();
-      wrap.remove();
-      const status = this.addMsg("buddy-status", "Updating…");
-      const abort = this.track(new AbortController());
-      const followPrompt = `${this.basePromptFor(kind)}\n\nThe user reviewed your previous result and asks: "${instruction}". ` +
-        `Apply that to the text below (which is the ORIGINAL note, not your previous output).`;
-      try {
-        const next = await this.plugin.agent.transform(followPrompt, original, {
-          model: cfg.model, thinking: cfg.thinking, allowWeb: false, abort,
-        });
-        status.remove();
-        this.renderDiff(original, next, kind, cfg, target, editor);
-      } catch (e) {
-        this.showError(status, e);
-      }
-    };
-  }
-
+  // ---- history ----
   private ensureThread() {
     if (!this.thread) {
       this.thread = newThread(crypto.randomUUID(), Date.now());
@@ -247,103 +527,30 @@ export class FloatingWidget {
     }
     return this.thread;
   }
+  private resetStream() { this.clearPending(); this.clearDiff(); this.streamEl.empty(); }
 
-  private async sendChat(text: string) {
-    if (this.busy) return;
-    this.busy = true;
-    try {
-      this.open();
-      const thread = this.ensureThread();
-      addMessage(thread, "user", text);
-      this.addMsg("buddy-user").setText(text);
-      const status = this.addMsg("buddy-status", "Thinking…");
-      const cfg = this.plugin.settings.chat;
-      const abort = this.track(new AbortController());
-
-      const ui = {
-        onAskUser: (q: string) => this.askUser(q),
-        onProposeEdit: (content: string, summary: string) => this.proposeEdit(content, summary),
-        onProgress: (t: string) => status.setText(t),
-      };
-      try {
-        const { text: reply, sessionId } = await this.plugin.agent.chat(text, thread.sessionId, ui, {
-          model: cfg.model, thinking: cfg.thinking, allowWeb: this.plugin.settings.allowWeb, abort,
-        });
-        thread.sessionId = sessionId;
-        status.remove();
-        addMessage(thread, "assistant", reply);
-        this.addMsg("buddy-assistant").setText(reply);
-        await this.plugin.saveSettings();
-      } catch (e) {
-        this.showError(status, e);
-        await this.plugin.saveSettings();
-      }
-    } finally {
-      this.busy = false;
-    }
-  }
-
-  private track(c: AbortController): AbortController {
-    this.aborters.add(c);
-    return c;
-  }
-
-  // Reject any in-flight ask/propose promises so awaiting callers unblock.
-  private clearPending() {
-    if (this.pendingPropose) { const r = this.pendingPropose; this.pendingPropose = null; r(false); }
-    if (this.pendingAsk) { const r = this.pendingAsk; this.pendingAsk = null; r(""); }
-  }
-
-  private cancelAll() {
-    for (const c of this.aborters) c.abort();
-    this.aborters.clear();
-    this.clearPending();
-    // ponytail: completed controllers stay in aborters until cancelAll clears them — aborting settled controllers is a harmless no-op
-  }
-
-  private resetStream() {
-    this.clearPending();
-    this.streamEl.empty();
-  }
-
-  // Chat's only way to edit: diff the active note's current content against the proposal.
-  private proposeEdit(content: string, _summary: string): Promise<boolean> {
-    return new Promise((resolve) => {
-      const view = this.plugin.activeMarkdownView();
-      if (!view) { this.addMsg("buddy-error", "No open note to edit."); resolve(false); return; }
-      this.pendingPropose = resolve;
-      const editor = view.editor;
-      const original = editor.getValue();
-      const wrap = this.addMsg("buddy-diff");
-      this.renderDiffLines(wrap, original, content);
-      const actions = wrap.createDiv({ cls: "buddy-diff-actions" });
-      const accept = actions.createEl("button", { text: "Accept", cls: "mod-cta" });
-      const reject = actions.createEl("button", { text: "Reject" });
-      accept.onclick = () => { this.pendingPropose = null; applyTarget(editor, { text: original, isSelection: false }, content); wrap.setText("✓ Applied."); resolve(true); };
-      reject.onclick = () => { this.pendingPropose = null; wrap.setText("Rejected."); resolve(false); };
-    });
+  private basePromptFor(kind: "fix" | "refine"): string {
+    return kind === "fix" ? PROMPTS.fixFormatting : PROMPTS.refine(this.plugin.settings.styleGuide);
   }
 
   private showHistory() {
     this.resetStream();
     const list = this.addMsg("buddy-history");
-    const nw = list.createEl("button", { text: "+ New chat", cls: "mod-cta" });
+    const nw = list.createEl("button", { cls: "buddy-pb is-accept" });
+    nw.setText("+ New chat");
     nw.onclick = () => { this.thread = null; this.resetStream(); };
     for (const t of this.plugin.threads) {
       const row = list.createDiv({ cls: "buddy-hist-row" });
-      const open = row.createSpan({ cls: "buddy-hist-title", text: t.title });
-      open.onclick = () => this.loadThread(t);
-      const del = row.createSpan({ cls: "buddy-ctl" });
-      setIcon(del, "trash");
-      del.onclick = async () => {
+      row.createSpan({ cls: "buddy-hist-title", text: t.title }).onclick = () => this.loadThread(t);
+      const del = this.iconBtn(row, "cancel-01", "Delete", async () => {
         this.plugin.threads = this.plugin.threads.filter((x) => x.id !== t.id);
         if (this.thread?.id === t.id) this.thread = null;
         await this.plugin.saveSettings();
         this.showHistory();
-      };
+      });
+      del.addClass("buddy-hist-del");
     }
   }
-
   private loadThread(t: ChatThread) {
     this.thread = t;
     this.resetStream();

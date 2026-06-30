@@ -3,6 +3,7 @@ import { BuddySettings, DEFAULT_SETTINGS, BuddySettingTab } from "./settings";
 import { ChatThread } from "./history";
 import { AgentClient, resolveClaudePath } from "./agent";
 import { FloatingWidget } from "./widget";
+import { buddyDiffField } from "./editor-diff";
 
 interface BuddyData {
   settings: BuddySettings;
@@ -25,6 +26,10 @@ export default class BuddyPlugin extends Plugin {
       claudePath: resolveClaudePath(this.settings.claudePath),
     });
     this.widget = new FloatingWidget(this);
+
+    // Renders the in-editor inline diff preview (red deletions / green additions) when Claude
+    // proposes an edit. Decorations only; the document is untouched until the user accepts.
+    this.registerEditorExtension(buddyDiffField);
 
     this.addCommand({
       id: "toggle-claude-widget",

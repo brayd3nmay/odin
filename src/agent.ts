@@ -73,10 +73,17 @@ export interface RunOpts {
   abort: AbortController;
 }
 
-export interface AgentUI {
+// Live streaming hooks. Driven by includePartialMessages: text/thinking deltas arrive as
+// stream_event messages; tool calls are read off assistant messages.
+export interface StreamHooks {
+  onText?(delta: string): void;
+  onThinking?(delta: string): void;
+  onTool?(name: string): void;
+}
+
+export interface AgentUI extends StreamHooks {
   onAskUser(q: string): Promise<string>;
   onProposeEdit?(content: string, summary: string): Promise<boolean>;
-  onProgress?(text: string): void;
 }
 
 // ponytail: parent_tool_use_id is required (string | null) in SDKUserMessage; brief omitted it.
@@ -99,7 +106,8 @@ export class AgentClient {
   constructor(private cfg: { cwd: string; claudePath?: string }) {}
 
   // One-shot transform: no tools, plain string prompt. Used by Fix Formatting & Refine.
-  async transform(systemPrompt: string, text: string, o: RunOpts): Promise<string> {
+  // `hooks` optionally surfaces live thinking while it works (the result is shown as a diff, not typed).
+  async transform(systemPrompt: string, text: string, o: RunOpts, hooks?: StreamHooks): Promise<string> {
     const messages: any[] = [];
     for await (const m of query({
       prompt: text,
@@ -109,10 +117,12 @@ export class AgentClient {
         tools: [],
         pathToClaudeCodeExecutable: this.cfg.claudePath,
         abortController: o.abort,
+        ...(hooks ? { includePartialMessages: true } : {}),
         ...thinkingOpt(o.thinking),
       },
     })) {
       messages.push(m);
+      if (hooks) this.handleStream(m, hooks);
     }
     return stripFences(extractText(messages));
   }
@@ -137,11 +147,12 @@ export class AgentClient {
         allowedTools: [...builtins, "mcp__buddy__ask_user"],
         pathToClaudeCodeExecutable: this.cfg.claudePath,
         abortController: o.abort,
+        includePartialMessages: true,
         ...thinkingOpt(o.thinking),
       },
     })) {
       messages.push(m);
-      this.reportProgress(m, ui);
+      this.handleStream(m, ui);
     }
     return extractText(messages);
   }
@@ -175,21 +186,31 @@ export class AgentClient {
         resume: resumeSessionId,
         pathToClaudeCodeExecutable: this.cfg.claudePath,
         abortController: o.abort,
+        includePartialMessages: true,
         ...thinkingOpt(o.thinking),
       },
     })) {
       messages.push(m);
       if ((m as any)?.session_id) sessionId = (m as any).session_id;
-      this.reportProgress(m, ui);
+      this.handleStream(m, ui);
     }
     return { text: extractText(messages), sessionId };
   }
 
-  private reportProgress(m: any, ui: AgentUI) {
-    if (!ui.onProgress) return;
-    if (m?.type === "assistant") {
+  // Fan out streaming events: text/thinking deltas (from stream_event) drive the typewriter and
+  // live reasoning; tool_use blocks (from assistant messages) drive the step list.
+  private handleStream(m: any, hooks: StreamHooks) {
+    if (m?.type === "stream_event") {
+      const delta = m.event?.delta;
+      if (m.event?.type === "content_block_delta" && delta) {
+        if (delta.type === "text_delta" && hooks.onText) hooks.onText(delta.text);
+        else if (delta.type === "thinking_delta" && hooks.onThinking) hooks.onThinking(delta.thinking);
+      }
+      return;
+    }
+    if (m?.type === "assistant" && hooks.onTool) {
       for (const b of m.message?.content ?? []) {
-        if (b?.type === "tool_use") ui.onProgress(`Using ${b.name}…`);
+        if (b?.type === "tool_use") hooks.onTool(b.name);
       }
     }
   }
