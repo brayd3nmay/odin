@@ -36,19 +36,15 @@ class Thinking {
   private start = Date.now();
   private done = false;
 
-  constructor(parent: HTMLElement, scroll: () => void) {
-    // Collapsed by default: the head is a one-line toggle; the steps + reasoning stay hidden until expanded.
+  constructor(parent: HTMLElement, private scroll: () => void) {
     this.el = parent.createDiv({ cls: "buddy-think is-collapsed" });
     this.head = this.el.createDiv({ cls: "buddy-think-head" });
     this.head.onclick = () => this.el.toggleClass("is-collapsed", !this.el.hasClass("is-collapsed"));
     this.steps = this.el.createDiv({ cls: "buddy-steps" });
     this.reason = this.el.createDiv({ cls: "buddy-think-reason" });
-    this.scroll = scroll;
     this.renderHead();
   }
-  private scroll: () => void;
 
-  // Live: chevron + spinner + "Thinking…". Done: chevron + "Thought for Ns".
   private renderHead() {
     this.head.empty();
     setIcon(this.head.createSpan({ cls: "buddy-chev" }), "chevron-right");
@@ -231,7 +227,6 @@ export class FloatingWidget {
     menu.showAtMouseEvent(ev);
   }
 
-  // ---- modes ----
   private setMode(mode: Mode) {
     this.mode = mode;
     this.bubble.toggleClass("is-hidden", mode === "card");
@@ -243,7 +238,6 @@ export class FloatingWidget {
   expand() { this.expanded = !this.expanded; this.card.toggleClass("is-expanded", this.expanded); }
   destroy() { this.cancelAll(); this.root.remove(); }
 
-  // ---- stream rendering helpers ----
   private addMsg(cls: string, text?: string): HTMLElement {
     const el = this.streamEl.createDiv({ cls: `buddy-msg ${cls}` });
     if (text) el.setText(text);
@@ -282,7 +276,6 @@ export class FloatingWidget {
   private cancelAll() { this.cancelRuns(); this.clearPending(); this.clearDiff(); }
   private clearPending() { if (this.pendingAsk) { const r = this.pendingAsk; this.pendingAsk = null; r(""); } }
 
-  // ---- input / keys ----
   private submit() {
     const v = this.input.value.trim();
     if (!v) return;
@@ -304,7 +297,6 @@ export class FloatingWidget {
     }
   }
 
-  // ---- quick actions ----
   async runQuickAction(kind: "fix" | "refine" | "gaps") {
     this.open();
     if (this.busy) return;
@@ -378,7 +370,6 @@ export class FloatingWidget {
     }
   }
 
-  // ---- chat ----
   private async sendChat(text: string) {
     if (this.busy) return;
     this.open();
@@ -438,7 +429,6 @@ export class FloatingWidget {
     };
   }
 
-  // ---- in-editor diff preview + panel controls ----
   private presentEdit(view: any, editor: LineEditor, region: Region, proposed: string, steer?: (instruction: string) => void): Promise<boolean> {
     // No-op edit: nothing to add or delete → don't force a diff, just say so.
     const plan = planDiff(region.text, proposed);
@@ -514,7 +504,6 @@ export class FloatingWidget {
     return this.presentEdit(view, editor, region, content);
   }
 
-  // ---- ask_user ----
   askUser(question: string): Promise<string> {
     return new Promise((resolve) => {
       const box = this.addMsg("buddy-ask");
@@ -535,7 +524,6 @@ export class FloatingWidget {
     });
   }
 
-  // ---- history ----
   private ensureThread() {
     if (!this.thread) {
       this.thread = newThread(crypto.randomUUID());
