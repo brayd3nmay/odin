@@ -6,9 +6,9 @@ import { showDiff, hideDiff } from "./editor-diff";
 import { planDiff } from "./diffplan";
 import { PROMPTS, StreamHooks, EditResult } from "./agent";
 import { newThread, addMessage, ChatThread } from "./history";
-import { THINKING_LEVELS, FeatureConfig, ThinkingLevel, modelsForProvider, providerLabel } from "./settings";
+import { THINKING_LEVELS, FeatureConfig, ThinkingLevel, modelChoices, providerLabel } from "./settings";
 import { SkillInfo } from "./skill";
-import { CLAUDE_SPARK } from "./icons";
+import { brandMark } from "./icons";
 
 type Mode = "collapsed" | "card";
 
@@ -69,6 +69,7 @@ class Thinking {
   private live: LiveNode | null = null;
   private start = Date.now();
   private done = false;
+  private hasContent = false;
 
   constructor(parent: HTMLElement, private scroll: () => void) {
     // Expanded by default: the timeline is visible inline. The head still toggles a whole-block collapse.
@@ -110,6 +111,7 @@ class Thinking {
       detail = body.createDiv({ cls: "odin-tl-detail" });
     }
     this.live = { el: node, ic, kind, detail, text: "" };
+    this.hasContent = true;
     this.setHead(kind === "think" ? "Thinking…" : label);
     this.scroll();
     return body;
@@ -145,6 +147,8 @@ class Thinking {
     if (this.done) return;
     this.done = true;
     this.markLastDone();
+    // A block that never produced a node is noise — drop it instead of leaving a bare "Thought for 0s".
+    if (!this.hasContent) { this.el.remove(); return; }
     const secs = ((Date.now() - this.start) / 1000).toFixed(1);
     this.setHead(`Thought for ${secs}s`);
     this.peek.empty();
@@ -165,8 +169,12 @@ class Transcript {
   private closeReply() { if (this.reply) { this.reply.done(); this.reply = null; } }
 
   thinking(delta: string) { this.closeReply(); (this.think ??= this.mkThink()).reasoning(delta); }
-  tool(name: string) { this.closeReply(); (this.think ??= this.mkThink()).tool(name); }
-  text(delta: string) { this.closeThink(); (this.reply ??= this.mkReply()).append(delta); }
+  // Skip tools that render no node (ask_user/propose_note_edit — surfaced via break()-driven UI), so
+  // they don't spawn an empty "Thinking" block.
+  tool(name: string) { if (!stepInfo(name)) return; this.closeReply(); (this.think ??= this.mkThink()).tool(name); }
+  // Whitespace-only deltas before any real reply must not close the live thinking block or open an
+  // empty bubble — that's what splits one thinking pass into two stacked blocks.
+  text(delta: string) { if (!this.reply && !delta.trim()) return; this.closeThink(); (this.reply ??= this.mkReply()).append(delta); }
   // Close open blocks so the next thing (an ask box, an edit popup, more output) starts below them.
   break() { this.closeThink(); this.closeReply(); }
   finish(full: string) {
@@ -190,6 +198,7 @@ export class FloatingWidget {
   private slashMenu!: HTMLElement;
   private modelSel!: HTMLElement;
   private thinkSel!: HTMLElement;
+  private titleSpark!: HTMLElement;
   private mode: Mode = "collapsed";
   private expanded = false;
   private historyOpen = false;
@@ -220,7 +229,7 @@ export class FloatingWidget {
     this.bubble = this.root.createEl("button", { cls: "odin-bubble" });
     setTooltip(this.bubble, "Open Odin");
     this.bubble.setAttr("aria-label", "Open Odin");
-    html(this.bubble, CLAUDE_SPARK);
+    html(this.bubble, brandMark(this.plugin.settings.chat.provider));
     this.bubble.onclick = () => this.open();
     this.card = this.root.createDiv({ cls: "odin-card", attr: { role: "dialog", "aria-label": "Odin chat" } });
     this.buildChrome();
@@ -231,7 +240,8 @@ export class FloatingWidget {
   private buildChrome() {
     const header = this.card.createDiv({ cls: "odin-header" });
     const title = header.createDiv({ cls: "odin-title" });
-    html(title.createSpan({ cls: "odin-title-spark" }), CLAUDE_SPARK);
+    this.titleSpark = title.createSpan({ cls: "odin-title-spark" });
+    html(this.titleSpark, brandMark(this.plugin.settings.chat.provider));
     title.createSpan({ text: "Odin" });
     header.createDiv({ cls: "odin-spacer" });
     this.iconBtn(header, "plus", "New chat", () => this.newChat());
@@ -262,8 +272,15 @@ export class FloatingWidget {
       attr: { placeholder: PLACEHOLDER, rows: "1" },
     });
     const bar = this.field.createDiv({ cls: "odin-inbar" });
-    this.modelSel = this.ghostSelect(bar, (ev) =>
-      this.pickerMenu(ev, modelsForProvider(this.plugin.settings.provider), this.plugin.settings.chat.model, (id) => { this.plugin.settings.chat.model = id; }));
+    this.modelSel = this.ghostSelect(bar, (ev) => {
+      const cfg = this.plugin.settings.chat;
+      const items = modelChoices(this.plugin.agent.availableProviders()).map((c) => ({ id: `${c.provider}:${c.id}`, label: c.label }));
+      this.pickerMenu(ev, items, `${cfg.provider}:${cfg.model}`, (key) => {
+        const [provider, ...rest] = key.split(":");
+        cfg.provider = provider as typeof cfg.provider;
+        cfg.model = rest.join(":");
+      });
+    });
     this.thinkSel = this.ghostSelect(bar, (ev) =>
       this.pickerMenu(ev, THINKING_LEVELS, this.plugin.settings.chat.thinking, (id) => { this.plugin.settings.chat.thinking = id as ThinkingLevel; }));
     bar.createDiv({ cls: "odin-spacer" });
@@ -384,11 +401,22 @@ export class FloatingWidget {
     return b;
   }
 
+  // Re-render the brand marks (bubble, header, empty-state spark) after the provider changes.
+  refreshBrand() {
+    const mark = brandMark(this.plugin.settings.chat.provider);
+    html(this.bubble, mark);
+    html(this.titleSpark, mark);
+    const empty = this.streamEl.querySelector<HTMLElement>(".odin-empty-spark");
+    if (empty) html(empty, mark);
+  }
+
   private refreshSelectors() {
     const cfg = this.plugin.settings.chat;
-    const model = modelsForProvider(this.plugin.settings.provider).find((m) => m.id === cfg.model)?.label ?? cfg.model;
+    const label = modelChoices(this.plugin.agent.availableProviders())
+      .find((c) => c.provider === cfg.provider && c.id === cfg.model)?.label
+      ?? `${providerLabel(cfg.provider)} · ${cfg.model}`;
     const think = THINKING_LEVELS.find((t) => t.id === cfg.thinking)?.label ?? cfg.thinking;
-    this.modelSel.setText(`${providerLabel(this.plugin.settings.provider)}: ${model}`);
+    this.modelSel.setText(label);
     setIcon(this.modelSel.createSpan({ cls: "odin-car" }), "chevron-down");
     this.thinkSel.setText(think);
     setIcon(this.thinkSel.createSpan({ cls: "odin-car" }), "chevron-down");
@@ -436,7 +464,7 @@ export class FloatingWidget {
   private maybeEmpty() {
     if (this.streamEl.childElementCount) return;
     const e = this.streamEl.createDiv({ cls: "odin-empty" });
-    html(e.createSpan({ cls: "odin-empty-spark" }), CLAUDE_SPARK);
+    html(e.createSpan({ cls: "odin-empty-spark" }), brandMark(this.plugin.settings.chat.provider));
     e.createDiv({ text: "Ask about your notes, or type / for commands." });
   }
   private clearEmpty() { this.streamEl.querySelector(".odin-empty")?.remove(); }
@@ -564,7 +592,7 @@ export class FloatingWidget {
     const abort = this.track(new AbortController());
     try {
       const proposed = await this.plugin.agent.transform(this.basePromptFor(kind), region.text, {
-        model: cfg.model, thinking: cfg.thinking, allowWeb: false, abort,
+        provider: cfg.provider, model: cfg.model, thinking: cfg.thinking, allowWeb: false, abort,
       }, { onThinking: (d) => thinking.reasoning(d) });
       thinking.collapse();
       this.setBusy(false);
@@ -598,7 +626,7 @@ export class FloatingWidget {
           onThinking: (d) => tx.thinking(d),
           onText: (d) => tx.text(d),
         },
-        { model: cfg.model, thinking: cfg.thinking, allowWeb: this.plugin.settings.allowWeb, abort },
+        { provider: cfg.provider, model: cfg.model, thinking: cfg.thinking, allowWeb: this.plugin.settings.allowWeb, abort },
       );
       tx.finish(report);
       this.setBusy(false);
@@ -674,7 +702,7 @@ export class FloatingWidget {
     const prompt = openPath ? `[Currently open note: ${openPath}]\n\n${text}` : text;
     try {
       const { text: full, sessionId } = await this.plugin.agent.chat(prompt, thread.sessionId, ui, {
-        model: cfg.model, thinking: cfg.thinking, allowWeb: this.plugin.settings.allowWeb, abort,
+        provider: cfg.provider, model: cfg.model, thinking: cfg.thinking, allowWeb: this.plugin.settings.allowWeb, abort,
         styleGuide: this.plugin.settings.styleGuide,
       });
       thread.sessionId = sessionId;
@@ -886,7 +914,8 @@ export class FloatingWidget {
     const list = this.addMsg("odin-history");
     for (const t of this.plugin.threads) {
       const row = list.createDiv({ cls: "odin-hist-row" });
-      row.createSpan({ cls: "odin-hist-title", text: t.title }).onclick = () => this.loadThread(t);
+      row.onclick = () => this.loadThread(t);
+      row.createSpan({ cls: "odin-hist-title", text: t.title });
       const del = this.iconBtn(row, "trash-2", "Delete", async () => {
         this.plugin.threads = this.plugin.threads.filter((x) => x.id !== t.id);
         if (this.thread?.id === t.id) this.thread = null;
@@ -894,6 +923,7 @@ export class FloatingWidget {
         this.showHistory();
       });
       del.addClass("odin-hist-del");
+      del.addEventListener("click", (e) => e.stopPropagation());
     }
   }
   private loadThread(t: ChatThread) {

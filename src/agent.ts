@@ -134,6 +134,7 @@ export function resolveCodexPath(override: string, deps: ResolveCliPathDeps = {}
 }
 
 export interface RunOpts {
+  provider: AgentProvider;
   model: string;
   thinking: ThinkingLevel;
   allowWeb: boolean;
@@ -218,7 +219,16 @@ function parseCodexEdit(text: string): { reply: string; summary: string; content
 }
 
 export class AgentClient {
-  constructor(private cfg: { cwd: string; provider: AgentProvider; claudePath?: string; codexPath?: string }) {}
+  constructor(private cfg: { cwd: string; claudePath?: string; codexPath?: string }) {}
+
+  // Which providers have a resolved CLI. ponytail: best-effort detection from resolved
+  // CLI paths; show both if neither is detectable so we never lock the user out.
+  availableProviders(): AgentProvider[] {
+    const out: AgentProvider[] = [];
+    if (this.cfg.claudePath) out.push("claude");
+    if (this.cfg.codexPath) out.push("codex");
+    return out.length ? out : ["claude", "codex"];
+  }
 
   // The skills authored in this vault (<cwd>/.claude/skills/<slug>/SKILL.md), surfaced in the widget's
   // "/" menu so the user can run them directly. Sync + cheap (a handful of small files).
@@ -242,7 +252,7 @@ export class AgentClient {
   // One-shot transform used by Fix Formatting & Refine; the result is shown as a diff, not typed.
   // `hooks` optionally surfaces live thinking while it works.
   async transform(systemPrompt: string, text: string, o: RunOpts, hooks?: StreamHooks): Promise<string> {
-    if (this.cfg.provider === "codex") return this.transformCodex(systemPrompt, text, o, hooks);
+    if (o.provider === "codex") return this.transformCodex(systemPrompt, text, o, hooks);
     return this.transformClaude(systemPrompt, text, o, hooks);
   }
 
@@ -274,6 +284,7 @@ export class AgentClient {
       "Return only the transformed text with no commentary or code fences.\n\n---\n" +
       text;
     const result = await this.runCodex(prompt, {
+      provider: "codex",
       model: o.model,
       thinking: o.thinking,
       allowWeb: false,
@@ -284,7 +295,7 @@ export class AgentClient {
 
   // Read-only vault + optional web + ask_user. Used by Find Gaps.
   async analysis(systemPrompt: string, userText: string, ui: AgentUI, o: RunOpts): Promise<string> {
-    if (this.cfg.provider === "codex") return this.analysisCodex(systemPrompt, userText, ui, o);
+    if (o.provider === "codex") return this.analysisCodex(systemPrompt, userText, ui, o);
     return this.analysisClaude(systemPrompt, userText, ui, o);
   }
 
@@ -333,7 +344,7 @@ export class AgentClient {
     ui: AgentUI,
     o: RunOpts,
   ): Promise<{ text: string; sessionId: string }> {
-    if (this.cfg.provider === "codex") return this.chatCodex(userText, resumeSessionId, ui, o);
+    if (o.provider === "codex") return this.chatCodex(userText, resumeSessionId, ui, o);
     return this.chatClaude(userText, resumeSessionId, ui, o);
   }
 
